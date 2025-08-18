@@ -1,0 +1,16 @@
+[server] Starting run...
+Using CPython 3.11.9
+Creating virtual environment with seed packages at: .venv
+warning: A virtual environment already exists at `.venv`. In the future, uv will require `--clear` to replace it
+Activate with: source .venv/bin/activate
+Audited 1 package in 1ms
+[runner] Starting...
+[33m[runner] Running .runner/main.py[0m
+/home/tgenlis/Desktop/projects/netkego/.venv/lib/python3.11/site-packages/torch/_subclasses/functional_tensor.py:279: UserWarning: Failed to initialize NumPy: No module named 'numpy' (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:81.)
+  cpu = _conversion_method_template(device=torch.device("cpu"))
+Output shape: (1, 64, 56, 56)
+[32m[runner] main.py finished[0m
+[33m[runner] Done in 0.797s[0m
+Done in 0.797s
+
+[server] Process exited with code 0

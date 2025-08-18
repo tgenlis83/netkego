@@ -1,0 +1,11 @@
+[runner] Starting...
+[33m[runner] Loading generated module...[0m
+/home/tgenlis/Desktop/projects/networkego/.venv/lib/python3.11/site-packages/torch/_subclasses/functional_tensor.py:279: UserWarning: Failed to initialize NumPy: No module named 'numpy' (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:81.)
+  cpu = _conversion_method_template(device=torch.device("cpu"))
+[32m[runner] Loaded.[0m
+OK: output shape = (1, 64, 56, 56)
+[32m[runner] OK: output shape = (1, 64, 56, 56)[0m
+Done in 0.831s
+[33m[runner] Done in 0.831s[0m
+
+[server] Process exited with code 0

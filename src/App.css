@@ -1,0 +1,10 @@
+/* Tailwind CSS (v4) utilities & preflight */
+@import "tailwindcss";
+
+/* Project-wide light tweaks that align with App.jsx full-viewport layout */
+#root {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  text-align: initial;
+}

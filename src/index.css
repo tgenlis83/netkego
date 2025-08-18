@@ -1,0 +1,15 @@
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #f8fafc; /* light gray like the canvas preview */
+}
+
+#root {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  text-align: initial;
+}
