@@ -51,7 +51,7 @@ export function parseMetrics(text){
   return out;
 }
 
-export function MiniChart({ title, data, color }){
+export function MiniChart({ title, data, color, xLabel='epoch', yLabel }){
   const w=280, h=120, pad=8;
   const xs = data.map(p=>p.x).filter(x=>Number.isFinite(x));
   const ys = data.map(p=>p.y).filter(y=>Number.isFinite(y));
@@ -64,7 +64,13 @@ export function MiniChart({ title, data, color }){
     <div className="border rounded-md p-2 bg-white">
       <div className="text-xs mb-1">{title}</div>
       <svg width={w} height={h}>
+  {/* axes */}
+  <line x1={pad} y1={h-pad} x2={w-pad} y2={h-pad} stroke="#e5e7eb" strokeWidth="1"/>
+  <line x1={pad} y1={pad} x2={pad} y2={h-pad} stroke="#e5e7eb" strokeWidth="1"/>
         <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round"/>
+  {/* labels */}
+  <text x={w - pad} y={h - 2} textAnchor="end" fontSize="10" fill="#6b7280">{xLabel}</text>
+  <text x={pad+2} y={pad+10} fontSize="10" fill="#6b7280">{yLabel || (title.toLowerCase().includes('acc')? 'acc' : 'loss')}</text>
       </svg>
     </div>
   );

@@ -24,6 +24,8 @@ import LayerToken from "@/components/builder/LayerToken";
 import AnsiLog from "@/components/builder/AnsiLog";
 import ColorChip from "@/components/builder/ColorChip";
 import { MetricsViewer, MetricsSummary } from "@/components/builder/Metrics";
+import TrainingProgress from "@/components/builder/TrainingProgress";
+import CheckpointPicker from "@/components/builder/CheckpointPicker";
 
 /**
  * Blocks & Builder — Library
@@ -72,6 +74,7 @@ with torch.no_grad():
 
 print('Output shape:', tuple(y.shape))`
   );
+  const [resumeOpen, setResumeOpen] = useState(false);
 
   // Build Block state
   const [H,setH]=useState(56); const [W,setW]=useState(56); const [Cin,setCin]=useState(64);
@@ -436,7 +439,7 @@ print('Output shape:', tuple(y.shape))`
   };
 
   // Hyperparameters tab
-  const [hp,setHp]=useState({ optimizer:"SGD", lr:0.1, momentum:0.9, weightDecay:1e-4, scheduler:"cosine", warmup:5, epochs:50, labelSmoothing:0.0, mixup:0.0, cutmix:0.0, stochasticDepth:0.0, ema:false, cosineRestarts:false, T0:10, Tmult:2, batchSize:128, numWorkers:2, loss:"CrossEntropy", valSplit:0.1, gradClip:0.0, stepSize:30, gamma:0.1 });
+  const [hp,setHp]=useState({ optimizer:"SGD", lr:0.1, momentum:0.9, weightDecay:1e-4, scheduler:"cosine", warmup:5, epochs:50, labelSmoothing:0.0, mixup:0.0, cutmix:0.0, stochasticDepth:0.0, ema:false, cosineRestarts:false, T0:10, Tmult:2, batchSize:128, numWorkers:2, loss:"CrossEntropy", valSplit:0.1, gradClip:0.0, stepSize:30, gamma:0.1, device:'auto' });
   const applyPreset = (p)=>{ setHp(prev=>({ ...prev, ...p.details, cosineRestarts: p.details.scheduler==="cosine_warm_restarts" })); };
 
   const exportJSON = ()=>{
@@ -491,6 +494,7 @@ print('Output shape:', tuple(y.shape))`
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="mt-2 text-[11px] p-2 rounded-md bg-neutral-100 text-neutral-700">{dsInfo?.desc}</div>
                   <div className="grid grid-cols-3 gap-2 opacity-80">
                     <div><div className="text-xs">H</div><Input readOnly value={H}/></div>
                     <div><div className="text-xs">W</div><Input readOnly value={W}/></div>
@@ -855,9 +859,22 @@ print('Output shape:', tuple(y.shape))`
                         <Select value={hp.scheduler} onValueChange={(v)=>setHp({...hp, scheduler:v, cosineRestarts: v==="cosine_warm_restarts" })}>
                           <SelectTrigger className="w-full"><SelectValue/></SelectTrigger>
                           <SelectContent>
+                            <SelectItem value="none">None</SelectItem>
                             <SelectItem value="cosine">Cosine Annealing</SelectItem>
                             <SelectItem value="cosine_warm_restarts">Cosine with Warm Restarts (SGDR)</SelectItem>
                             <SelectItem value="step">Step Decay</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <div className="text-xs">Device</div>
+                        <Select value={hp.device} onValueChange={(v)=>setHp({...hp, device:v})}>
+                          <SelectTrigger className="w-full"><SelectValue/></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="auto">Auto (CUDA▶MPS▶CPU)</SelectItem>
+                            <SelectItem value="cuda">CUDA</SelectItem>
+                            <SelectItem value="mps">MPS</SelectItem>
+                            <SelectItem value="cpu">CPU</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -921,6 +938,32 @@ print('Output shape:', tuple(y.shape))`
                       <div className="flex items-center gap-2">
                         <Switch checked={hp.ema} onCheckedChange={(v)=>setHp({...hp, ema:v})}/> <span>EMA</span>
                       </div>
+                      {inputMode==='dataset' && dsInfo && (()=>{
+                        // find last linear in model
+                        const lastLinear = [...model].reverse().map((el,idx)=>({el, idx:model.length-1-idx})).find(({el})=> el.type==='layer' ? el.id==='linear' : el.steps?.some(s=>s.id==='linear'));
+                        if(!lastLinear) return null;
+                        let mismatch=false;
+                        let fixFn=null;
+                        if(lastLinear.el.type==='layer'){
+                          mismatch = (lastLinear.el.cfg?.outF !== dsInfo.classes);
+                          fixFn = ()=> setModel(prev=>{ const arr=[...prev]; arr[lastLinear.idx] = { ...arr[lastLinear.idx], cfg: { ...(arr[lastLinear.idx].cfg||{}), outF: dsInfo.classes } }; return arr; });
+                        } else {
+                          // block: set last linear inside
+                          const steps = lastLinear.el.steps;
+                          const j = [...steps].reverse().findIndex(s=>s.id==='linear');
+                          if(j>=0){
+                            const realJ = steps.length-1-j;
+                            mismatch = (steps[realJ].cfg?.outF !== dsInfo.classes);
+                            fixFn = ()=> setModel(prev=>{ const arr=[...prev]; const block=arr[lastLinear.idx]; const newSteps=[...block.steps]; newSteps[realJ] = { ...newSteps[realJ], cfg: { ...(newSteps[realJ].cfg||{}), outF: dsInfo.classes } }; arr[lastLinear.idx] = { ...block, steps:newSteps }; return arr; });
+                          }
+                        }
+                        return mismatch ? (
+                          <div className="mt-1 p-2 rounded-md bg-amber-50 border border-amber-200 text-amber-800 flex items-center justify-between">
+                            <span>Last Linear out ({/* @ts-ignore */ lastLinear.el.type==='layer' ? lastLinear.el.cfg?.outF : 'block'}) ≠ classes ({dsInfo.classes}).</span>
+                            <Button size="sm" variant="secondary" onClick={fixFn}>Set to {dsInfo.classes}</Button>
+                          </div>
+                        ) : null;
+                      })()}
                     </CardContent>
                   </Card>
 
@@ -987,7 +1030,10 @@ print('Output shape:', tuple(y.shape))`
                         <Button variant="outline" onClick={()=>downloadText('generated_block.py', code)}>Download .py</Button>
                         <Button onClick={()=>saveGenerated(code)} variant="default">Save to runner/generated_block.py</Button>
             <Button variant="secondary" onClick={()=>runPython(code, mainCode)} title="Runs in a uv-managed venv on CPU"><PlayCircle className="w-4 h-4 mr-1"/>Run</Button>
+                        <Button variant="destructive" onClick={()=>requestStop()} title="Signal the running training to stop early">Stop</Button>
+                        <Button variant="outline" onClick={()=>setResumeOpen(true)} title="Resume from a checkpoint">Resume…</Button>
                       </div>
+                      <CheckpointPicker open={resumeOpen} onClose={()=>setResumeOpen(false)} onPick={({path, mode})=> requestResume(path, mode)} />
                       <CodeEditor language="python" value={code} onChange={setCode} className="h-[30vh]"/>
                       <div className="text-xs text-neutral-500 mt-1">This file now emits CIN/H/W, a GeneratedBlock for the Build tab, and if a Model is defined, a GeneratedModel class that flattens blocks and layers.</div>
                     </CardContent>
@@ -1014,6 +1060,7 @@ print('Output shape:', tuple(y.shape))`
                   <Card>
                     <CardHeader><CardTitle>Run Output</CardTitle></CardHeader>
                     <CardContent className="text-xs space-y-2">
+                      <TrainingProgress />
                       <AnsiLog url="/api/run-output" />
                     </CardContent>
                   </Card>
@@ -1063,6 +1110,30 @@ async function runPython(text, main){
     }
   } catch {}
   fetch('/api/run-python', { method: 'POST' }).catch(()=>{})
+}
+
+// Request the Python loop to stop by creating a STOP flag file on the backend
+function requestStop(){
+  // Try common endpoints; backend may support one of these
+  const tryEndpoints = [
+    ['/api/stop-training', { method: 'POST' }],
+    ['/api/stop', { method: 'POST' }],
+    ['/api/save-stop', { method: 'PUT', body: 'STOP' }],
+  ];
+  let ok=false;
+  tryEndpoints.reduce((p,[url,init])=> p.catch(()=>fetch(url, init)), Promise.reject())
+    .catch(()=>{})
+}
+
+// Write a resume request that the Python script will pick up at startup
+function requestResume(path, mode){
+  const payload = JSON.stringify({ path, mode });
+  const tries = [
+    ['/api/resume-training', { method:'POST', headers:{'Content-Type':'application/json'}, body: payload }],
+    ['/api/save-resume', { method:'PUT', headers:{'Content-Type':'application/json'}, body: payload }],
+    ['/api/save-file?path=.runner/RESUME.json', { method:'PUT', headers:{'Content-Type':'application/json'}, body: payload }],
+  ];
+  tries.reduce((p,[url,init])=> p.catch(()=>fetch(url, init)), Promise.reject()).catch(()=>{})
 }
 
 // Polls ANSI-colored output file and renders colorized lines
@@ -1397,7 +1468,26 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('from torch.utils.data import DataLoader, random_split');
   emit('import torchvision');
   emit('import torchvision.transforms as T');
+  emit('from tqdm import tqdm');
+  emit('from pathlib import Path');
   emit('from runner.generated_block import GeneratedBlock, CIN, H, W' + (hasModel? ', GeneratedModel':'') );
+  emit('');
+  emit('STOP_PATH = Path(".runner/STOP")');
+  emit('RESUME_CFG = Path(".runner/RESUME.json")');
+  emit('def should_stop():');
+  emit('    try: return STOP_PATH.exists()');
+  emit('    except Exception: return False');
+  emit('');
+  emit('def get_resume_request():');
+  emit('    try:');
+  emit('        import json');
+  emit('        if RESUME_CFG.exists():');
+  emit('            data = json.loads(RESUME_CFG.read_text())');
+  emit('            RESUME_CFG.unlink(missing_ok=True)');
+  emit('            return data');
+  emit('    except Exception as e:');
+  emit('        print("WARN: resume read error:", e)');
+  emit('    return None');
   emit('');
   emit('def get_datasets(root="./data", val_split='+hp.valSplit.toString()+'):');
   emit(`    mean_std = { 'CIFAR10': ([0.4914,0.4822,0.4465],[0.247,0.243,0.261]), 'CIFAR100': ([0.507,0.487,0.441],[0.267,0.256,0.276]), 'MNIST': ([0.1307],[0.3081]), 'FashionMNIST': ([0.2860],[0.3530]), 'STL10': ([0.4467,0.4398,0.4066],[0.2603,0.2566,0.2713]) }`);
@@ -1441,18 +1531,57 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   else emit(`    return optim.SGD(model.parameters(), lr=${hp.lr}, momentum=${hp.momentum??0.9}, weight_decay=${hp.weightDecay})`);
   emit('');
   emit('def get_scheduler(opt):');
-  if(hp.scheduler==='cosine_warm_restarts') emit(`    return optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=${hp.T0}, T_mult=${hp.Tmult})`);
-  else if(hp.scheduler==='step') emit(`    return optim.lr_scheduler.StepLR(opt, step_size=${hp.stepSize}, gamma=${hp.gamma})`);
-  else emit('    return optim.lr_scheduler.CosineAnnealingLR(opt, T_max=10)');
+  if(hp.scheduler==='none'){
+    emit('    return None');
+  } else if(hp.scheduler==='cosine_warm_restarts'){
+    emit(`    return optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=${hp.T0}, T_mult=${hp.Tmult})`);
+  } else if(hp.scheduler==='step'){
+    emit(`    return optim.lr_scheduler.StepLR(opt, step_size=${hp.stepSize}, gamma=${hp.gamma})`);
+  } else {
+    emit('    return optim.lr_scheduler.CosineAnnealingLR(opt, T_max=10)');
+  }
   emit('');
   emit('def accuracy(logits, targets):');
   emit('    if logits.dim()>2: logits = logits.mean(dim=(-1,-2))');
   emit('    preds = logits.argmax(dim=1)');
   emit('    return (preds==targets).float().mean().item()');
   emit('');
-  emit('def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip=0.0):');
-  emit('    model.train(); total=0.0');
-  emit('    for x,y in loader:');
+  emit('def ensure_trainable(model, sample_loader, device, num_classes):');
+  emit('    try:');
+  emit('        nparams = sum(p.numel() for p in model.parameters())');
+  emit('    except Exception:');
+  emit('        nparams = 0');
+  emit('    if nparams>0:');
+  emit('        return model');
+  emit('    print("WARN: Model has no trainable parameters; adding a small linear head.")');
+  emit('    # infer feature dim with a dry forward');
+  emit('    x0,_ = next(iter(sample_loader))');
+  emit('    x0 = x0.to(device)[:1]');
+  emit('    with torch.no_grad():');
+  emit('        y0 = model(x0)');
+  emit('        if y0.dim()>2: y0 = y0.mean(dim=(-1,-2))');
+  emit('        feat = y0.shape[1] if y0.dim()==2 else int(y0.numel())');
+  emit('    class Wrap(nn.Module):');
+  emit('        def __init__(self, base, feat, num_classes):');
+  emit('            super().__init__()');
+  emit('            self.base = base');
+  emit('            self.head = nn.Linear(feat, num_classes)');
+  emit('        def forward(self, x):');
+  emit('            out = self.base(x)');
+  emit('            if out.dim()>2: out = out.mean(dim=(-1,-2))');
+  emit('            return self.head(out)');
+  emit('    w = Wrap(model, int(feat), '+String(numClasses)+').to(device)');
+  emit('    return w');
+  emit('');
+  emit('def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip=0.0, global_step_start=0):');
+  emit('    model.train(); total=0.0; global_step=global_step_start');
+  emit('    import os; os.makedirs("checkpoints", exist_ok=True)');
+  emit('    for x,y in tqdm(loader, desc="train", leave=False):');
+  emit('        if should_stop():');
+  emit('            print("STOP: requested — exiting train loop.")');
+  emit('            try: STOP_PATH.unlink(missing_ok=True)');
+  emit('            except Exception: pass');
+  emit('            break');
   emit('        x=x.to(device); y=y.to(device)');
   emit('        optimizer.zero_grad()');
   emit('        out = model(x)');
@@ -1462,12 +1591,22 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('        if grad_clip>0: nn.utils.clip_grad_norm_(model.parameters(), grad_clip)');
   emit('        optimizer.step()');
   emit('        total += loss.item() * x.size(0)');
-  emit('    return total / len(loader.dataset)');
+  emit('        global_step += 1');
+  emit('        # per-step checkpoint')
+  emit('        ckpt_step={"model": model.state_dict(), "optimizer": optimizer.state_dict(), "global_step": global_step}');
+  emit('        torch.save(ckpt_step, f"checkpoints/step_{global_step:06d}.pt")');
+  emit('        torch.save(ckpt_step, "checkpoints/last_step.pt")');
+  emit('    return total / len(loader.dataset), global_step');
   emit('');
   emit('def evaluate(model, loader, criterion, device):');
   emit('    model.eval(); total=0.0; accs=0.0');
   emit('    with torch.no_grad():');
-  emit('        for x,y in loader:');
+  emit('        for x,y in tqdm(loader, desc="val", leave=False):');
+  emit('            if should_stop():');
+  emit('                print("STOP: requested — exiting val loop.")');
+  emit('                try: STOP_PATH.unlink(missing_ok=True)');
+  emit('                except Exception: pass');
+  emit('                break');
   emit('            x=x.to(device); y=y.to(device)');
   emit('            out = model(x)');
   emit('            if out.dim()>2: out = out.mean(dim=(-1,-2))');
@@ -1476,23 +1615,89 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('            accs += accuracy(out, y) * x.size(0)');
   emit('    return total/len(loader.dataset), accs/len(loader.dataset)');
   emit('');
+  emit('def resolve_device(pref="auto"):');
+  emit('    if pref=="cuda" and torch.cuda.is_available(): return torch.device("cuda")');
+  emit('    if pref=="mps" and getattr(torch.backends, "mps", None) and torch.backends.mps.is_available(): return torch.device("mps")');
+  emit('    if pref=="cpu": return torch.device("cpu")');
+  emit('    # auto fallback: CUDA ▶ MPS ▶ CPU');
+  emit('    if torch.cuda.is_available(): return torch.device("cuda")');
+  emit('    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available(): return torch.device("mps")');
+  emit('    return torch.device("cpu")');
+  emit('');
   emit('def main():');
-  emit('    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")');
+  emit(`    device = resolve_device("${hp.device||'auto'}")`);
   emit('    train_ds, val_ds, test_ds = get_datasets()');
   emit(`    train_loader = DataLoader(train_ds, batch_size=${hp.batchSize}, shuffle=True, num_workers=${hp.numWorkers}, pin_memory=True)`);
   emit(`    val_loader = DataLoader(val_ds, batch_size=${hp.batchSize}, shuffle=False, num_workers=${hp.numWorkers})`);
   emit(`    test_loader = DataLoader(test_ds, batch_size=${hp.batchSize}, shuffle=False, num_workers=${hp.numWorkers})`);
   emit('    model = get_model(device)');
+  emit('    model = ensure_trainable(model, train_loader, device, '+String(numClasses)+')');
   emit('    criterion = get_loss()');
   emit('    optimizer = get_optimizer(model)');
   emit('    scheduler = get_scheduler(optimizer)');
   emit('    best=0.0');
-  emit(`    for epoch in range(1, ${hp.epochs}+1):`);
-  emit(`        tr_loss = train_one_epoch(model, train_loader, criterion, optimizer, device, grad_clip=${hp.gradClip})`);
+  emit('    import os; os.makedirs("checkpoints", exist_ok=True)');
+  emit('    global_step = 0');
+  emit('    # Resume if requested');
+  emit('    resume = get_resume_request()');
+  emit('    if resume:');
+  emit('        from pathlib import Path as _Path');
+  emit('        ckpt_path = _Path(resume.get("path","checkpoints/best.pt"))');
+  emit('        if ckpt_path.exists():');
+  emit('            try:');
+  emit('                payload = torch.load(ckpt_path, map_location=device)');
+  emit('                sd = payload["model"] if isinstance(payload, dict) and "model" in payload else payload');
+  emit('                _incomp = model.load_state_dict(sd, strict=False)');
+  emit('                try:');
+  emit('                    miss = getattr(_incomp, "missing_keys", [])');
+  emit('                    unexp = getattr(_incomp, "unexpected_keys", [])');
+  emit('                except Exception:');
+  emit('                    miss, unexp = [], []');
+  emit('                if miss: print("WARN: missing keys:", miss)');
+  emit('                if unexp: print("WARN: unexpected keys:", unexp)');
+  emit('                if resume.get("mode","full") == "full":');
+  emit('                    if "optimizer" in payload: optimizer.load_state_dict(payload["optimizer"])');
+  emit('                    if "scheduler" in payload and scheduler:');
+  emit('                        try: scheduler.load_state_dict(payload["scheduler"])');
+  emit('                        except Exception: pass');
+  emit('                    global_step = int(payload.get("global_step", 0))');
+  emit('                    start_epoch = int(payload.get("epoch", 0)) + 1');
+  emit('                else:');
+  emit('                    start_epoch = 1');
+  emit('                best = float(payload.get("best", 0.0))');
+  emit('                print(f"RESUME: loaded {ckpt_path} mode={resume.get(\"mode\", \"full\")} start_epoch={start_epoch} best={best:.4f} global_step={global_step}")');
+  emit('            except Exception as e:');
+  emit('                print("WARN: failed to resume:", e)');
+  emit('                start_epoch = 1');
+  emit('        else:');
+  emit('            print(f"WARN: checkpoint not found: {ckpt_path}")');
+  emit('            start_epoch = 1');
+  emit('    else:');
+  emit('        start_epoch = 1');
+  emit(`    for epoch in range(start_epoch, ${hp.epochs}+1):`);
+  emit('        if should_stop():');
+  emit('            print("STOP: requested — stopping before new epoch.")');
+  emit('            try: STOP_PATH.unlink(missing_ok=True)');
+  emit('            except Exception: pass');
+  emit('            break');
+  emit(`        print("EPOCH:", epoch, "/${hp.epochs}")`);
+  emit(`        tr_loss, global_step = train_one_epoch(model, train_loader, criterion, optimizer, device, grad_clip=${hp.gradClip}, global_step_start=global_step)`);
   emit('        val_loss, val_acc = evaluate(model, val_loader, criterion, device)');
-  emit('        try: scheduler.step()\n        except Exception: pass');
+  emit('        try:\n            (scheduler.step() if scheduler else None)\n        except Exception:\n            pass');
   emit('        print(f"METRIC: epoch={epoch} train_loss={tr_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")')
-  emit('        if val_acc>best: best=val_acc; print(f"BEST: val_acc={best:.4f}")')
+  emit('        improved = val_acc>best')
+  emit('        if improved: best=val_acc; print(f"BEST: val_acc={best:.4f}")')
+  emit('        # save checkpoints each epoch and best')
+  emit('        ckpt={"model": model.state_dict(), "optimizer": optimizer.state_dict(), "epoch": epoch, "best": best, "global_step": global_step, "val_acc": float(val_acc)}');
+  emit('        if scheduler: ckpt["scheduler"]=scheduler.state_dict()');
+  emit('        fname = f"checkpoints/epoch_{epoch:03d}_val{val_acc:.4f}.pt"');
+  emit('        torch.save(ckpt, fname)');
+  emit('        torch.save(ckpt, "checkpoints/last.pt")');
+  emit('        # save best checkpoint only when improved')
+  emit('        if improved:');
+  emit('            torch.save(ckpt, "checkpoints/best.pt")');
+  emit('            print(f"CKPT: type=best path=checkpoints/best.pt epoch={epoch} val_acc={val_acc:.4f}")')
+  emit('        print(f"CKPT: type=epoch path={fname} epoch={epoch} val_acc={val_acc:.4f}")')
   emit('    tl, ta = evaluate(model, test_loader, criterion, device)');
   emit('    print(f"TEST: acc={ta:.4f} loss={tl:.4f}")');
   emit('');

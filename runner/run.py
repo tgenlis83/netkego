@@ -4,6 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 GEN_PATH = ROOT / '.runner' / 'generated_block.py'
 MAIN_PATH = ROOT / '.runner' / 'main.py'
+STOP_UPPER = ROOT / '.runner' / 'STOP'
+STOP_LOWER = ROOT / '.runner' / 'stop'
 
 ANSI_RED = "\x1b[31m"; ANSI_GREEN = "\x1b[32m"; ANSI_YELLOW = "\x1b[33m"; ANSI_RESET = "\x1b[0m"
 
@@ -33,6 +35,12 @@ def main():
     start = time.time()
     try:
         tee_write("[runner] Starting...\n")
+        # clear any stale STOP flags
+        try:
+            if STOP_UPPER.exists(): STOP_UPPER.unlink()
+            if STOP_LOWER.exists(): STOP_LOWER.unlink()
+        except Exception:
+            pass
         if MAIN_PATH.exists():
             write_line(ANSI_YELLOW + "[runner] Running .runner/main.py" + ANSI_RESET)
             # Ensure project root on path so `import runner.generated_block` works

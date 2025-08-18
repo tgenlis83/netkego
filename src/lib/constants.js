@@ -130,9 +130,9 @@ export const HP_PRESETS = [
 ];
 
 export const DATASETS = [
-  { id:'CIFAR10', name:'CIFAR-10', H:32, W:32, C:3, classes:10 },
-  { id:'CIFAR100', name:'CIFAR-100', H:32, W:32, C:3, classes:100 },
-  { id:'MNIST', name:'MNIST', H:28, W:28, C:1, classes:10 },
-  { id:'FashionMNIST', name:'Fashion-MNIST', H:28, W:28, C:1, classes:10 },
-  { id:'STL10', name:'STL10', H:96, W:96, C:3, classes:10 },
+  { id:'CIFAR10', name:'CIFAR-10', H:32, W:32, C:3, classes:10, desc: '60k 32×32 color images (50k train/10k test), 10 classes. Natural object categories.' },
+  { id:'CIFAR100', name:'CIFAR-100', H:32, W:32, C:3, classes:100, desc: '60k 32×32 color images (50k train/10k test), 100 fine-grained classes.' },
+  { id:'MNIST', name:'MNIST', H:28, W:28, C:1, classes:10, desc: '70k 28×28 grayscale digit images (60k train/10k test), 10 classes (0–9).' },
+  { id:'FashionMNIST', name:'Fashion-MNIST', H:28, W:28, C:1, classes:10, desc: '70k 28×28 grayscale fashion images (60k train/10k test), 10 apparel classes.' },
+  { id:'STL10', name:'STL10', H:96, W:96, C:3, classes:10, desc: '13k labeled 96×96 color images (5k train/8k test), 10 classes; extra 100k unlabeled.' },
 ];

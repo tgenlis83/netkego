@@ -82,7 +82,7 @@ function apiPlugin() {
               'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"',
               'uv venv --seed .venv',
               '. .venv/bin/activate',
-              'uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch torchvision',
+              'uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch torchvision tqdm',
               'python runner/run.py',
             ].join(' && '),
           ]
