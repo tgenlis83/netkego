@@ -120,6 +120,52 @@ function apiPlugin() {
           res.end(String(e))
         }
       })
+
+      // Write a STOP flag so the running Python loop stops gracefully
+      server.middlewares.use('/api/stop-training', (req, res, next) => {
+        if (req.method !== 'POST') return next()
+        try {
+          const stopPath = out('.runner/STOP')
+          fs.mkdirSync(path.dirname(stopPath), { recursive: true })
+          fs.writeFileSync(stopPath, 'STOP', 'utf8')
+          res.statusCode = 200
+          res.end('ok')
+        } catch (e) {
+          res.statusCode = 500
+          res.end(String(e))
+        }
+      })
+
+      // Generic: save a file to a project-relative path with body as content
+      server.middlewares.use('/api/save-file', (req, res, next) => {
+        if (req.method !== 'PUT') return next()
+        try {
+          const u = new URL(req.url, 'http://local')
+          const target = u.searchParams.get('path')
+          if (!target) {
+            res.statusCode = 400
+            return res.end('Missing path')
+          }
+          let body = ''
+          req.setEncoding('utf8')
+          req.on('data', (c) => (body += c))
+          req.on('end', () => {
+            try {
+              const abs = out(target)
+              fs.mkdirSync(path.dirname(abs), { recursive: true })
+              fs.writeFileSync(abs, body, 'utf8')
+              res.statusCode = 200
+              res.end('ok')
+            } catch (e) {
+              res.statusCode = 500
+              res.end(String(e))
+            }
+          })
+        } catch (e) {
+          res.statusCode = 500
+          res.end(String(e))
+        }
+      })
     },
   }
 }

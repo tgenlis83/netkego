@@ -23,7 +23,7 @@ import BlockLayersPreview from "@/components/builder/BlockLayersPreview";
 import LayerToken from "@/components/builder/LayerToken";
 import AnsiLog from "@/components/builder/AnsiLog";
 import ColorChip from "@/components/builder/ColorChip";
-import { MetricsViewer, MetricsSummary } from "@/components/builder/Metrics";
+import { MetricsViewer, MetricsSummary, ConfusionMatrix } from "@/components/builder/Metrics";
 import TrainingProgress from "@/components/builder/TrainingProgress";
 import CheckpointPicker from "@/components/builder/CheckpointPicker";
 
@@ -80,6 +80,7 @@ print('Output shape:', tuple(y.shape))`
   const [H,setH]=useState(56); const [W,setW]=useState(56); const [Cin,setCin]=useState(64);
   const [inputMode, setInputMode] = useState('custom'); // 'dataset' | 'custom'
   const [datasetId, setDatasetId] = useState('CIFAR10');
+  const [datasetPct, setDatasetPct] = useState(100); // 1-100% of training set
   const dsInfo = DATASETS.find(d=>d.id===datasetId);
   React.useEffect(()=>{
     if(inputMode==='dataset' && dsInfo){ setH(dsInfo.H); setW(dsInfo.W); setCin(dsInfo.C); }
@@ -446,7 +447,7 @@ print('Output shape:', tuple(y.shape))`
     const payload = { 
       block: block.map(s=>({ id:s.id, cfg:s.cfg })),
       model: model.map(el=> el.type==='layer' ? ({ type:'layer', id:el.id, cfg:el.cfg }) : ({ type:'block', name:el.name, steps: el.steps })),
-      input: { H,W,Cin }, stats, modelStats, hyperparams: hp };
+  input: { H,W,Cin, mode: inputMode, datasetId, datasetPct }, stats, modelStats, hyperparams: hp };
     const blob = new Blob([JSON.stringify(payload,null,2)], { type:"application/json" });
     const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='block_builder_export.json'; a.click(); URL.revokeObjectURL(url);
   };
@@ -495,6 +496,11 @@ print('Output shape:', tuple(y.shape))`
                     </Select>
                   </div>
                   <div className="mt-2 text-[11px] p-2 rounded-md bg-neutral-100 text-neutral-700">{dsInfo?.desc}</div>
+                  <div>
+                    <div className="text-xs mb-1">Dataset sample</div>
+                    <Slider value={[datasetPct]} min={1} max={100} step={1} onValueChange={([v])=>setDatasetPct(v)} />
+                    <div className="text-xs mt-1 text-neutral-700">{datasetPct}% of training data (validation split will be applied within this sample).</div>
+                  </div>
                   <div className="grid grid-cols-3 gap-2 opacity-80">
                     <div><div className="text-xs">H</div><Input readOnly value={H}/></div>
                     <div><div className="text-xs">W</div><Input readOnly value={W}/></div>
@@ -987,7 +993,7 @@ print('Output shape:', tuple(y.shape))`
                   <Card>
                     <CardHeader><CardTitle>Export Preview</CardTitle></CardHeader>
                     <CardContent>
-                      <textarea className="w-full h-[52vh] text-xs font-mono p-2 border border-neutral-200 rounded-xl bg-white/90 shadow-inner" readOnly value={JSON.stringify({ block: block.map(s=>({id:s.id,cfg:s.cfg})), input:{H,W,Cin}, stats, hyperparams: hp }, null, 2)} />
+                      <textarea className="w-full h-[52vh] text-xs font-mono p-2 border border-neutral-200 rounded-xl bg-white/90 shadow-inner" readOnly value={JSON.stringify({ block: block.map(s=>({id:s.id,cfg:s.cfg})), input:{H,W,Cin, mode: inputMode, datasetId, datasetPct}, stats, hyperparams: hp }, null, 2)} />
                       <div className="text-xs text-neutral-500 mt-1">Copy or use Export to download JSON.</div>
                     </CardContent>
                   </Card>
@@ -1006,6 +1012,15 @@ print('Output shape:', tuple(y.shape))`
                       <div className="text-xs text-neutral-600 mt-2">Curves parse lines starting with "METRIC:" from Run Output.</div>
                     </CardContent>
                   </Card>
+                  {inputMode==='dataset' && dsInfo?.classes>1 && (
+                    <Card className="mt-3">
+                      <CardHeader><CardTitle>Confusion Matrix</CardTitle></CardHeader>
+                      <CardContent className="text-sm">
+                        <ConfusionMatrix classes={dsInfo.classes} />
+                        <div className="text-xs text-neutral-600 mt-2">Computed on test set after training finishes. Saved at checkpoints/confusion.json.</div>
+                      </CardContent>
+                    </Card>
+                  )}
                 </div>
                 <div className="col-span-2">
                   <Card>
@@ -1046,7 +1061,7 @@ print('Output shape:', tuple(y.shape))`
                         <Button variant="secondary" onClick={()=>copyText(mainCode)}>Copy</Button>
                         <Button variant="outline" onClick={()=>downloadText('main.py', mainCode)}>Download main.py</Button>
                         <Button onClick={()=>saveMain(mainCode)} variant="default">Save to .runner/main.py</Button>
-                        <Button variant="secondary" onClick={()=> setMainCode(generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datasetId })) } title={inputMode==='dataset'? 'Generate training code for dataset' : 'Custom mode uses random tensors; training disabled'} disabled={inputMode!=='dataset'}>
+                        <Button variant="secondary" onClick={()=> setMainCode(generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datasetId, datasetPct })) } title={inputMode==='dataset'? 'Generate training code for dataset' : 'Custom mode uses random tensors; training disabled'} disabled={inputMode!=='dataset'}>
                           Generate Training Script
                         </Button>
                       </div>
@@ -1116,9 +1131,11 @@ async function runPython(text, main){
 function requestStop(){
   // Try common endpoints; backend may support one of these
   const tryEndpoints = [
-    ['/api/stop-training', { method: 'POST' }],
-    ['/api/stop', { method: 'POST' }],
-    ['/api/save-stop', { method: 'PUT', body: 'STOP' }],
+  // Prefer explicit backend endpoint, then fall back to file save
+  ['/api/stop-training', { method: 'POST' }],
+  ['/api/save-file?path=.runner/STOP', { method:'PUT', body:'STOP' }],
+  ['/api/save-stop', { method: 'PUT', body: 'STOP' }],
+  ['/api/stop', { method: 'POST' }],
   ];
   let ok=false;
   tryEndpoints.reduce((p,[url,init])=> p.catch(()=>fetch(url, init)), Promise.reject())
@@ -1456,7 +1473,7 @@ function estimateMemoryMB(stats, batch){
 function formatMem(mb){ if(!isFinite(mb)) return '-'; return mb>1024 ? (mb/1024).toFixed(2)+ ' GB' : mb.toFixed(1)+' MB'; }
 
 // Generate a training/testing script based on UI
-function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datasetId }){
+function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datasetId, datasetPct=100 }){
   const dsName = datasetId || 'CIFAR10';
   const hasModel = (model && model.length>0);
   const numClasses = (DATASETS.find(d=>d.id===dsName)?.classes)||10;
@@ -1489,7 +1506,7 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('        print("WARN: resume read error:", e)');
   emit('    return None');
   emit('');
-  emit('def get_datasets(root="./data", val_split='+hp.valSplit.toString()+'):');
+  emit('def get_datasets(root="./data", val_split='+hp.valSplit.toString()+', sample_pct='+String(Math.max(1, Math.min(100, datasetPct)))+'):');
   emit(`    mean_std = { 'CIFAR10': ([0.4914,0.4822,0.4465],[0.247,0.243,0.261]), 'CIFAR100': ([0.507,0.487,0.441],[0.267,0.256,0.276]), 'MNIST': ([0.1307],[0.3081]), 'FashionMNIST': ([0.2860],[0.3530]), 'STL10': ([0.4467,0.4398,0.4066],[0.2603,0.2566,0.2713]) }`);
   emit(`    mean,std = mean_std.get('${dsName}', ([0.5]*${Cin}, [0.5]*${Cin}))`);
   emit('    tf_train = T.Compose([T.ToTensor(), T.Normalize(mean, std)])');
@@ -1512,8 +1529,14 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   } else {
     emit(`    raise ValueError('Unsupported dataset: ${dsName}')`);
   }
+  emit('    # Optional training subset sampling BEFORE val split');
+  emit('    sample_pct = max(1, min(100, int(sample_pct)))');
+  emit('    if sample_pct < 100:');
+  emit('        g = torch.Generator().manual_seed(42)');
+  emit('        idx = torch.randperm(len(full), generator=g)[: max(1, int(len(full) * (sample_pct/100.0)))]');
+  emit('        full = torch.utils.data.Subset(full, idx.tolist())');
   emit('    n_val = max(1, int(len(full) * val_split))');
-  emit('    n_train = len(full) - n_val');
+  emit('    n_train = max(1, len(full) - n_val)');
   emit('    train, val = random_split(full, [n_train, n_val], generator=torch.Generator().manual_seed(42))');
   emit('    return train, val, test');
   emit('');
@@ -1615,6 +1638,20 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('            accs += accuracy(out, y) * x.size(0)');
   emit('    return total/len(loader.dataset), accs/len(loader.dataset)');
   emit('');
+  emit('def confusion_matrix(model, loader, device, num_classes):');
+  emit('    import torch');
+  emit('    cm = torch.zeros((num_classes, num_classes), dtype=torch.long)');
+  emit('    model.eval()');
+  emit('    with torch.no_grad():');
+  emit('        for x,y in tqdm(loader, desc="confusion", leave=False):');
+  emit('            x=x.to(device); y=y.to(device)');
+  emit('            out = model(x)');
+  emit('            if out.dim()>2: out = out.mean(dim=(-1,-2))');
+  emit('            pred = out.argmax(dim=1)');
+  emit('            for t,p in zip(y.view(-1), pred.view(-1)):');
+  emit('                cm[t.long(), p.long()] += 1');
+  emit('    return cm');
+  emit('');
   emit('def resolve_device(pref="auto"):');
   emit('    if pref=="cuda" and torch.cuda.is_available(): return torch.device("cuda")');
   emit('    if pref=="mps" and getattr(torch.backends, "mps", None) and torch.backends.mps.is_available(): return torch.device("mps")');
@@ -1626,7 +1663,7 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('');
   emit('def main():');
   emit(`    device = resolve_device("${hp.device||'auto'}")`);
-  emit('    train_ds, val_ds, test_ds = get_datasets()');
+  emit(`    train_ds, val_ds, test_ds = get_datasets(sample_pct=${Math.max(1, Math.min(100, datasetPct))})`);
   emit(`    train_loader = DataLoader(train_ds, batch_size=${hp.batchSize}, shuffle=True, num_workers=${hp.numWorkers}, pin_memory=True)`);
   emit(`    val_loader = DataLoader(val_ds, batch_size=${hp.batchSize}, shuffle=False, num_workers=${hp.numWorkers})`);
   emit(`    test_loader = DataLoader(test_ds, batch_size=${hp.batchSize}, shuffle=False, num_workers=${hp.numWorkers})`);
@@ -1700,6 +1737,23 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('        print(f"CKPT: type=epoch path={fname} epoch={epoch} val_acc={val_acc:.4f}")')
   emit('    tl, ta = evaluate(model, test_loader, criterion, device)');
   emit('    print(f"TEST: acc={ta:.4f} loss={tl:.4f}")');
+  emit('    # Save confusion matrix for classification tasks (num_classes>1)');
+  emit('    try:');
+  emit('        if '+String(numClasses)+' > 1:');
+  emit('            cm = confusion_matrix(model, test_loader, device, '+String(numClasses)+')');
+  emit('            import json');
+  emit('            import os');
+  emit('            os.makedirs("checkpoints", exist_ok=True)');
+  emit('            counts = cm.tolist()');
+  emit('            # row-normalize');
+  emit('            import math');
+  emit('            norm = []');
+  emit('            for row in counts:');
+  emit('                s = float(sum(row))');
+  emit('                norm.append([ (x/s if s>0 else 0.0) for x in row ])');
+  emit('            Path("checkpoints/confusion.json").write_text(json.dumps({"counts": counts, "normalized": norm}))');
+  emit('    except Exception as e:');
+  emit('        print("WARN: failed to save confusion matrix:", e)');
   emit('');
   emit('if __name__ == "__main__":');
   emit('    main()');

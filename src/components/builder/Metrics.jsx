@@ -12,8 +12,7 @@ export function MetricsViewer(){
   return (
     <div>
       <div className="grid grid-cols-2 gap-3">
-        <MiniChart title="Train Loss" data={metrics.train_loss||[]} color="#2563eb"/>
-        <MiniChart title="Val Loss" data={metrics.val_loss||[]} color="#dc2626"/>
+  <LossesChart title="Loss (Train/Val)" trainData={metrics.train_loss||[]} valData={metrics.val_loss||[]} trainColor="#2563eb" valColor="#dc2626" />
         <MiniChart title="Val Acc" data={metrics.val_acc||[]} color="#16a34a"/>
       </div>
     </div>
@@ -52,25 +51,193 @@ export function parseMetrics(text){
 }
 
 export function MiniChart({ title, data, color, xLabel='epoch', yLabel }){
-  const w=280, h=120, pad=8;
+  const w=280, h=140;
+  const padL=36, padR=8, padT=8, padB=22;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
   const xs = data.map(p=>p.x).filter(x=>Number.isFinite(x));
   const ys = data.map(p=>p.y).filter(y=>Number.isFinite(y));
   const xmin = xs.length? Math.min(...xs) : 0; const xmax= xs.length? Math.max(...xs):1;
   const ymin = ys.length? Math.min(...ys) : 0; const ymax= ys.length? Math.max(...ys):1;
-  const scaleX=(x)=> pad + (w-2*pad) * (xs.length? (x - xmin) / Math.max(1e-6, (xmax - xmin)) : 0);
-  const scaleY=(y)=> h - pad - (h-2*pad) * (ys.length? (y - ymin) / Math.max(1e-6, (ymax - ymin)) : 0);
+  const scaleX=(x)=> padL + plotW * (xs.length? (x - xmin) / Math.max(1e-6, (xmax - xmin)) : 0);
+  const scaleY=(y)=> padT + plotH - plotH * (ys.length? (y - ymin) / Math.max(1e-6, (ymax - ymin)) : 0);
   const path = data.filter(p=>Number.isFinite(p.x) && Number.isFinite(p.y)).map((p,i)=> (i? 'L':'M') + scaleX(p.x) + ',' + scaleY(p.y)).join(' ');
+  const isAcc = title.toLowerCase().includes('acc');
+  const best = ys.length ? (isAcc ? Math.max(...ys) : Math.min(...ys)) : undefined;
+  const bestPoint = (()=>{
+    if(!Number.isFinite(best)) return null;
+    let idx=-1;
+    for(let i=0;i<data.length;i++){ const p=data[i]; if(Number.isFinite(p.y) && p.y===best){ idx=i; break; } }
+    return idx>=0 ? data[idx] : null;
+  })();
+  const xTicks = 4; const yTicks = 4;
+  const xTickVals = Array.from({length: xTicks+1}, (_,i)=> xmin + (xmax - xmin) * (xTicks? i/xTicks : 0));
+  const yTickVals = Array.from({length: yTicks+1}, (_,i)=> ymin + (ymax - ymin) * (yTicks? i/yTicks : 0));
   return (
     <div className="border rounded-md p-2 bg-white">
-      <div className="text-xs mb-1">{title}</div>
+      <div className="text-xs mb-1 flex items-center justify-between">
+        <span>{title}</span>
+        {Number.isFinite(best) && (
+          <span className="text-[11px] text-neutral-700">{isAcc? 'max' : 'min'}: {fmt(best)}</span>
+        )}
+      </div>
       <svg width={w} height={h}>
-  {/* axes */}
-  <line x1={pad} y1={h-pad} x2={w-pad} y2={h-pad} stroke="#e5e7eb" strokeWidth="1"/>
-  <line x1={pad} y1={pad} x2={pad} y2={h-pad} stroke="#e5e7eb" strokeWidth="1"/>
+        {/* gridlines */}
+        {yTickVals.map((v,i)=> (
+          <line key={`y${i}`} x1={padL} y1={scaleY(v)} x2={w-padR} y2={scaleY(v)} stroke="#f3f4f6" strokeWidth="1" />
+        ))}
+        {xTickVals.map((v,i)=> (
+          <line key={`x${i}`} x1={scaleX(v)} y1={padT} x2={scaleX(v)} y2={h-padB} stroke="#f3f4f6" strokeWidth="1" />
+        ))}
+        {/* axes */}
+        <line x1={padL} y1={h-padB} x2={w-padR} y2={h-padB} stroke="#e5e7eb" strokeWidth="1"/>
+        <line x1={padL} y1={padT} x2={padL} y2={h-padB} stroke="#e5e7eb" strokeWidth="1"/>
+        {/* data */}
         <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round"/>
-  {/* labels */}
-  <text x={w - pad} y={h - 2} textAnchor="end" fontSize="10" fill="#6b7280">{xLabel}</text>
-  <text x={pad+2} y={pad+10} fontSize="10" fill="#6b7280">{yLabel || (title.toLowerCase().includes('acc')? 'acc' : 'loss')}</text>
+        {bestPoint && (
+          <g>
+            <circle cx={scaleX(bestPoint.x)} cy={scaleY(bestPoint.y)} r={3} fill={color} />
+          </g>
+        )}
+        {/* tick labels */}
+        {yTickVals.map((v,i)=> (
+          <text key={`yl${i}`} x={padL-6} y={scaleY(v)+3} textAnchor="end" fontSize="10" fill="#6b7280">{fmt(v)}</text>
+        ))}
+        {xTickVals.map((v,i)=> (
+          <text key={`xl${i}`} x={scaleX(v)} y={h-padB+12} textAnchor="middle" fontSize="10" fill="#6b7280">{Number.isFinite(v)? Math.round(v) : ''}</text>
+        ))}
+        {/* axis labels */}
+        <text x={w - padR} y={h - 4} textAnchor="end" fontSize="10" fill="#6b7280">{xLabel}</text>
+        <text x={padL+2} y={padT+10} fontSize="10" fill="#6b7280">{yLabel || (isAcc? 'acc' : 'loss')}</text>
+      </svg>
+    </div>
+  );
+}
+
+export function ConfusionMatrix({ classes }){
+  const [data,setData] = React.useState(null);
+  React.useEffect(()=>{
+    let alive=true;
+    const tick=()=>{
+      fetch(`/checkpoints/confusion.json?t=${Date.now()}`, { cache:'no-store' })
+        .then(r=> r.ok ? r.json() : null)
+        .then(j=>{ if(alive && j) setData(j); })
+        .catch(()=>{});
+    };
+    tick(); const id=setInterval(tick, 2000);
+    return ()=>{ alive=false; clearInterval(id); };
+  },[]);
+  const counts = data?.counts; const norm = data?.normalized;
+  const n = Array.isArray(norm)? norm.length : 0;
+  const size = 240; const pad=30; const cell = n? (size - pad) / n : 0;
+  const color = (v)=>{ // v in [0,1]
+    const t = Math.max(0, Math.min(1, Number(v)||0));
+    const r = Math.round(255 * (1 - t));
+    const g = Math.round(255 * (1 - 0.5*t));
+    const b = Math.round(255 * (1 - 0.9*t));
+    return `rgb(${r},${g},${b})`;
+  };
+  return (
+    <div className="border rounded-md p-2 bg-white">
+      <div className="text-xs mb-1 flex items-center justify-between">
+        <span>Confusion Matrix</span>
+        {!!n && <span className="text-[11px] text-neutral-600">{n} classes</span>}
+      </div>
+      {!n ? (
+        <div className="text-xs text-neutral-600">No confusion matrix yet. It will appear after testing completes.</div>
+      ) : (
+        <svg width={size} height={size}>
+          {/* axes labels */}
+          <text x={pad + (size-pad)/2} y={size-4} textAnchor="middle" fontSize="10" fill="#6b7280">Predicted</text>
+          <text x={10} y={pad/2} fontSize="10" fill="#6b7280" transform={`rotate(-90 10 ${pad/2})`}>True</text>
+          {/* grid */}
+          {norm.map((row, i)=> row.map((v,j)=> (
+            <g key={`c${i}-${j}`}>
+              <rect x={pad + j*cell} y={pad + i*cell} width={cell} height={cell} fill={color(v)} stroke="#e5e7eb" />
+              <text x={pad + j*cell + cell/2} y={pad + i*cell + cell/2 + 3} textAnchor="middle" fontSize="9" fill="#111827">{Math.round((v||0)*100)}%</text>
+            </g>
+          )))}
+          {/* ticks */}
+          {Array.from({length:n}, (_,i)=> (
+            <text key={`xl${i}`} x={pad + i*cell + cell/2} y={pad-4} textAnchor="middle" fontSize="8" fill="#6b7280">{i}</text>
+          ))}
+          {Array.from({length:n}, (_,i)=> (
+            <text key={`yl${i}`} x={pad-10} y={pad + i*cell + cell/2 + 3} textAnchor="end" fontSize="8" fill="#6b7280">{i}</text>
+          ))}
+        </svg>
+      )}
+      {counts && (
+        <div className="mt-1 text-[11px] text-neutral-600">Counts shown via hover not implemented; numbers reflect row-normalized percentages.</div>
+      )}
+    </div>
+  );
+}
+
+function LossesChart({ title, trainData, valData, trainColor, valColor, xLabel='epoch' }){
+  const w=280, h=140;
+  const padL=36, padR=8, padT=8, padB=22;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+  const xs = [...(trainData||[]), ...(valData||[])].map(p=>p.x).filter(x=>Number.isFinite(x));
+  const ys = [...(trainData||[]), ...(valData||[])].map(p=>p.y).filter(y=>Number.isFinite(y));
+  const xmin = xs.length? Math.min(...xs) : 0; const xmax= xs.length? Math.max(...xs):1;
+  const ymin = ys.length? Math.min(...ys) : 0; const ymax= ys.length? Math.max(...ys):1;
+  const scaleX=(x)=> padL + plotW * (xs.length? (x - xmin) / Math.max(1e-6, (xmax - xmin)) : 0);
+  const scaleY=(y)=> padT + plotH - plotH * (ys.length? (y - ymin) / Math.max(1e-6, (ymax - ymin)) : 0);
+  const mkPath = (arr)=> (arr||[]).filter(p=>Number.isFinite(p.x) && Number.isFinite(p.y)).map((p,i)=> (i? 'L':'M') + scaleX(p.x) + ',' + scaleY(p.y)).join(' ');
+  const pathTrain = mkPath(trainData);
+  const pathVal = mkPath(valData);
+  const minTrain = (trainData||[]).map(p=>p.y).filter(Number.isFinite).reduce((a,b)=> Math.min(a,b), +Infinity);
+  const minVal   = (valData||[]).map(p=>p.y).filter(Number.isFinite).reduce((a,b)=> Math.min(a,b), +Infinity);
+  const findPoint = (arr, y)=>{ if(!Number.isFinite(y)) return null; for(const p of (arr||[])){ if(Number.isFinite(p.y) && p.y===y) return p; } return null; };
+  const ptMinTrain = findPoint(trainData, minTrain);
+  const ptMinVal = findPoint(valData, minVal);
+  const xTicks = 4; const yTicks = 4;
+  const xTickVals = Array.from({length: xTicks+1}, (_,i)=> xmin + (xmax - xmin) * (xTicks? i/xTicks : 0));
+  const yTickVals = Array.from({length: yTicks+1}, (_,i)=> ymin + (ymax - ymin) * (yTicks? i/yTicks : 0));
+  return (
+    <div className="border rounded-md p-2 bg-white">
+      <div className="text-xs mb-1 flex items-center justify-between">
+        <span>{title}</span>
+        <span className="flex items-center gap-2">
+          {Number.isFinite(minTrain) && isFinite(minTrain) && <span className="text-[11px]" style={{color: trainColor}}>train min: {fmt(minTrain)}</span>}
+          {Number.isFinite(minVal) && isFinite(minVal) && <span className="text-[11px]" style={{color: valColor}}>val min: {fmt(minVal)}</span>}
+        </span>
+      </div>
+      <svg width={w} height={h}>
+        {/* gridlines */}
+        {yTickVals.map((v,i)=> (
+          <line key={`y${i}`} x1={padL} y1={scaleY(v)} x2={w-padR} y2={scaleY(v)} stroke="#f3f4f6" strokeWidth="1" />
+        ))}
+        {xTickVals.map((v,i)=> (
+          <line key={`x${i}`} x1={scaleX(v)} y1={padT} x2={scaleX(v)} y2={h-padB} stroke="#f3f4f6" strokeWidth="1" />
+        ))}
+        {/* axes */}
+        <line x1={padL} y1={h-padB} x2={w-padR} y2={h-padB} stroke="#e5e7eb" strokeWidth="1"/>
+        <line x1={padL} y1={padT} x2={padL} y2={h-padB} stroke="#e5e7eb" strokeWidth="1"/>
+        {/* data */}
+        <path d={pathTrain} fill="none" stroke={trainColor} strokeWidth="2" strokeLinecap="round"/>
+        <path d={pathVal} fill="none" stroke={valColor} strokeWidth="2" strokeLinecap="round"/>
+        {ptMinTrain && <circle cx={scaleX(ptMinTrain.x)} cy={scaleY(ptMinTrain.y)} r={3} fill={trainColor} />}
+        {ptMinVal && <circle cx={scaleX(ptMinVal.x)} cy={scaleY(ptMinVal.y)} r={3} fill={valColor} />}
+        {/* tick labels */}
+        {yTickVals.map((v,i)=> (
+          <text key={`yl${i}`} x={padL-6} y={scaleY(v)+3} textAnchor="end" fontSize="10" fill="#6b7280">{fmt(v)}</text>
+        ))}
+        {xTickVals.map((v,i)=> (
+          <text key={`xl${i}`} x={scaleX(v)} y={h-padB+12} textAnchor="middle" fontSize="10" fill="#6b7280">{Number.isFinite(v)? Math.round(v) : ''}</text>
+        ))}
+        {/* axis labels */}
+        <text x={w - padR} y={h - 4} textAnchor="end" fontSize="10" fill="#6b7280">{xLabel}</text>
+        <text x={padL+2} y={padT+10} fontSize="10" fill="#6b7280">loss</text>
+        {/* legend */}
+        <g transform={`translate(${w - padR - 90}, ${padT + 8})`}>
+          <rect x={0} y={-10} width={90} height={28} rx={4} ry={4} fill="#ffffff" stroke="#e5e7eb" />
+          <circle cx={10} cy={0} r={4} fill={trainColor} />
+          <text x={20} y={3} fontSize="10" fill="#374151">train</text>
+          <circle cx={10} cy={14} r={4} fill={valColor} />
+          <text x={20} y={17} fontSize="10" fill="#374151">val</text>
+        </g>
       </svg>
     </div>
   );

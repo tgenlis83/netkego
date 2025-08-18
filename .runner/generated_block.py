@@ -3,12 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # Inferred from UI (available to import in main.py)
-CIN = 1
-H = 28
-W = 28
+CIN = 3
+H = 32
+W = 32
 
 class GeneratedBlock(nn.Module):
-    def __init__(self, in_channels=1):
+    def __init__(self, in_channels=3):
         super().__init__()
 
     def forward(self, x):
@@ -16,9 +16,9 @@ class GeneratedBlock(nn.Module):
         return x
 
 class GeneratedModel(nn.Module):
-    def __init__(self, in_channels=1):
+    def __init__(self, in_channels=3):
         super().__init__()
-        self.m_0 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, groups=1, dilation=1, bias=False)
+        self.m_0 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, groups=1, dilation=1, bias=False)
         self.m_1 = nn.BatchNorm2d(64)
         self.m_2 = nn.ReLU(inplace=True)
         self.m_3 = nn.MaxPool2d(kernel_size=3, stride=2)

@@ -5,17 +5,41 @@ from torch.utils.data import DataLoader, random_split
 import torchvision
 import torchvision.transforms as T
 from tqdm import tqdm
+from pathlib import Path
 from runner.generated_block import GeneratedBlock, CIN, H, W, GeneratedModel
 
-def get_datasets(root="./data", val_split=0.1):
+STOP_PATH = Path(".runner/STOP")
+RESUME_CFG = Path(".runner/RESUME.json")
+def should_stop():
+    try: return STOP_PATH.exists()
+    except Exception: return False
+
+def get_resume_request():
+    try:
+        import json
+        if RESUME_CFG.exists():
+            data = json.loads(RESUME_CFG.read_text())
+            RESUME_CFG.unlink(missing_ok=True)
+            return data
+    except Exception as e:
+        print("WARN: resume read error:", e)
+    return None
+
+def get_datasets(root="./data", val_split=0.1, sample_pct=100):
     mean_std = { 'CIFAR10': ([0.4914,0.4822,0.4465],[0.247,0.243,0.261]), 'CIFAR100': ([0.507,0.487,0.441],[0.267,0.256,0.276]), 'MNIST': ([0.1307],[0.3081]), 'FashionMNIST': ([0.2860],[0.3530]), 'STL10': ([0.4467,0.4398,0.4066],[0.2603,0.2566,0.2713]) }
-    mean,std = mean_std.get('MNIST', ([0.5]*1, [0.5]*1))
+    mean,std = mean_std.get('CIFAR10', ([0.5]*3, [0.5]*3))
     tf_train = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
     tf_test  = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
-    full = torchvision.datasets.MNIST(root=root, train=True, download=True, transform=tf_train)
-    test = torchvision.datasets.MNIST(root=root, train=False, download=True, transform=tf_test)
+    full = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=tf_train)
+    test = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=tf_test)
+    # Optional training subset sampling BEFORE val split
+    sample_pct = max(1, min(100, int(sample_pct)))
+    if sample_pct < 100:
+        g = torch.Generator().manual_seed(42)
+        idx = torch.randperm(len(full), generator=g)[: max(1, int(len(full) * (sample_pct/100.0)))]
+        full = torch.utils.data.Subset(full, idx.tolist())
     n_val = max(1, int(len(full) * val_split))
-    n_train = len(full) - n_val
+    n_train = max(1, len(full) - n_val)
     train, val = random_split(full, [n_train, n_val], generator=torch.Generator().manual_seed(42))
     return train, val, test
 
@@ -27,10 +51,10 @@ def get_loss():
     return nn.CrossEntropyLoss()
 
 def get_optimizer(model):
-    return optim.AdamW(model.parameters(), lr=0.1, weight_decay=0.0001)
+    return optim.AdamW(model.parameters(), lr=0.01, weight_decay=0.0001)
 
 def get_scheduler(opt):
-    return optim.lr_scheduler.CosineAnnealingLR(opt, T_max=10)
+    return None
 
 def accuracy(logits, targets):
     if logits.dim()>2: logits = logits.mean(dim=(-1,-2))
@@ -68,6 +92,11 @@ def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip=0.0, 
     model.train(); total=0.0; global_step=global_step_start
     import os; os.makedirs("checkpoints", exist_ok=True)
     for x,y in tqdm(loader, desc="train", leave=False):
+        if should_stop():
+            print("STOP: requested — exiting train loop.")
+            try: STOP_PATH.unlink(missing_ok=True)
+            except Exception: pass
+            break
         x=x.to(device); y=y.to(device)
         optimizer.zero_grad()
         out = model(x)
@@ -88,6 +117,11 @@ def evaluate(model, loader, criterion, device):
     model.eval(); total=0.0; accs=0.0
     with torch.no_grad():
         for x,y in tqdm(loader, desc="val", leave=False):
+            if should_stop():
+                print("STOP: requested — exiting val loop.")
+                try: STOP_PATH.unlink(missing_ok=True)
+                except Exception: pass
+                break
             x=x.to(device); y=y.to(device)
             out = model(x)
             if out.dim()>2: out = out.mean(dim=(-1,-2))
@@ -95,6 +129,20 @@ def evaluate(model, loader, criterion, device):
             total += loss.item() * x.size(0)
             accs += accuracy(out, y) * x.size(0)
     return total/len(loader.dataset), accs/len(loader.dataset)
+
+def confusion_matrix(model, loader, device, num_classes):
+    import torch
+    cm = torch.zeros((num_classes, num_classes), dtype=torch.long)
+    model.eval()
+    with torch.no_grad():
+        for x,y in tqdm(loader, desc="confusion", leave=False):
+            x=x.to(device); y=y.to(device)
+            out = model(x)
+            if out.dim()>2: out = out.mean(dim=(-1,-2))
+            pred = out.argmax(dim=1)
+            for t,p in zip(y.view(-1), pred.view(-1)):
+                cm[t.long(), p.long()] += 1
+    return cm
 
 def resolve_device(pref="auto"):
     if pref=="cuda" and torch.cuda.is_available(): return torch.device("cuda")
@@ -107,10 +155,10 @@ def resolve_device(pref="auto"):
 
 def main():
     device = resolve_device("auto")
-    train_ds, val_ds, test_ds = get_datasets()
-    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
-    test_loader = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=8)
+    train_ds, val_ds, test_ds = get_datasets(sample_pct=100)
+    train_loader = DataLoader(train_ds, batch_size=4096, shuffle=True, num_workers=8, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=4096, shuffle=False, num_workers=8)
+    test_loader = DataLoader(test_ds, batch_size=4096, shuffle=False, num_workers=8)
     model = get_model(device)
     model = ensure_trainable(model, train_loader, device, 10)
     criterion = get_loss()
@@ -119,7 +167,48 @@ def main():
     best=0.0
     import os; os.makedirs("checkpoints", exist_ok=True)
     global_step = 0
-    for epoch in range(1, 10+1):
+    # Resume if requested
+    resume = get_resume_request()
+    if resume:
+        from pathlib import Path as _Path
+        ckpt_path = _Path(resume.get("path","checkpoints/best.pt"))
+        if ckpt_path.exists():
+            try:
+                payload = torch.load(ckpt_path, map_location=device)
+                sd = payload["model"] if isinstance(payload, dict) and "model" in payload else payload
+                _incomp = model.load_state_dict(sd, strict=False)
+                try:
+                    miss = getattr(_incomp, "missing_keys", [])
+                    unexp = getattr(_incomp, "unexpected_keys", [])
+                except Exception:
+                    miss, unexp = [], []
+                if miss: print("WARN: missing keys:", miss)
+                if unexp: print("WARN: unexpected keys:", unexp)
+                if resume.get("mode","full") == "full":
+                    if "optimizer" in payload: optimizer.load_state_dict(payload["optimizer"])
+                    if "scheduler" in payload and scheduler:
+                        try: scheduler.load_state_dict(payload["scheduler"])
+                        except Exception: pass
+                    global_step = int(payload.get("global_step", 0))
+                    start_epoch = int(payload.get("epoch", 0)) + 1
+                else:
+                    start_epoch = 1
+                best = float(payload.get("best", 0.0))
+                print(f"RESUME: loaded {ckpt_path} mode={resume.get("mode", "full")} start_epoch={start_epoch} best={best:.4f} global_step={global_step}")
+            except Exception as e:
+                print("WARN: failed to resume:", e)
+                start_epoch = 1
+        else:
+            print(f"WARN: checkpoint not found: {ckpt_path}")
+            start_epoch = 1
+    else:
+        start_epoch = 1
+    for epoch in range(start_epoch, 10+1):
+        if should_stop():
+            print("STOP: requested — stopping before new epoch.")
+            try: STOP_PATH.unlink(missing_ok=True)
+            except Exception: pass
+            break
         print("EPOCH:", epoch, "/10")
         tr_loss, global_step = train_one_epoch(model, train_loader, criterion, optimizer, device, grad_clip=0, global_step_start=global_step)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
@@ -128,16 +217,38 @@ def main():
         except Exception:
             pass
         print(f"METRIC: epoch={epoch} train_loss={tr_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
-        if val_acc>best: best=val_acc; print(f"BEST: val_acc={best:.4f}")
+        improved = val_acc>best
+        if improved: best=val_acc; print(f"BEST: val_acc={best:.4f}")
         # save checkpoints each epoch and best
-        ckpt={"model": model.state_dict(), "optimizer": optimizer.state_dict(), "epoch": epoch, "best": best}
+        ckpt={"model": model.state_dict(), "optimizer": optimizer.state_dict(), "epoch": epoch, "best": best, "global_step": global_step, "val_acc": float(val_acc)}
         if scheduler: ckpt["scheduler"]=scheduler.state_dict()
-        torch.save(ckpt, f"checkpoints/epoch_{epoch:03d}.pt")
+        fname = f"checkpoints/epoch_{epoch:03d}_val{val_acc:.4f}.pt"
+        torch.save(ckpt, fname)
         torch.save(ckpt, "checkpoints/last.pt")
         # save best checkpoint only when improved
-        if val_acc>=best: torch.save(ckpt, "checkpoints/best.pt")
+        if improved:
+            torch.save(ckpt, "checkpoints/best.pt")
+            print(f"CKPT: type=best path=checkpoints/best.pt epoch={epoch} val_acc={val_acc:.4f}")
+        print(f"CKPT: type=epoch path={fname} epoch={epoch} val_acc={val_acc:.4f}")
     tl, ta = evaluate(model, test_loader, criterion, device)
     print(f"TEST: acc={ta:.4f} loss={tl:.4f}")
+    # Save confusion matrix for classification tasks (num_classes>1)
+    try:
+        if 10 > 1:
+            cm = confusion_matrix(model, test_loader, device, 10)
+            import json
+            import os
+            os.makedirs("checkpoints", exist_ok=True)
+            counts = cm.tolist()
+            # row-normalize
+            import math
+            norm = []
+            for row in counts:
+                s = float(sum(row))
+                norm.append([ (x/s if s>0 else 0.0) for x in row ])
+            Path("checkpoints/confusion.json").write_text(json.dumps({"counts": counts, "normalized": norm}))
+    except Exception as e:
+        print("WARN: failed to save confusion matrix:", e)
 
 if __name__ == "__main__":
     main()
