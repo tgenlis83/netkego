@@ -14,7 +14,16 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { CodeEditor } from "@/components/ui/code-editor";
-import { X, Plus, ArrowUp, ArrowDown, Info, Wand2, Wrench, Layers as LayersIcon, Blocks, Settings2, Download, Link2, AlertTriangle, CheckCircle, Library, Boxes, Box } from "lucide-react";
+import { X, ArrowUp, ArrowDown, Info, Wrench, Layers as LayersIcon, Blocks, Settings2, Download, Link2, AlertTriangle, CheckCircle, Library, Boxes, Box, PlayCircle, LineChart } from "lucide-react";
+import { CAT_COLORS, LAYERS, PRESETS, MODEL_PRESETS, SYNERGIES, HP_PRESETS, DATASETS } from "@/lib/constants";
+import { copyText, downloadText } from "@/lib/utils";
+import Palette from "@/components/builder/Palette";
+import PresetBlocksPanel from "@/components/builder/PresetBlocksPanel";
+import BlockLayersPreview from "@/components/builder/BlockLayersPreview";
+import LayerToken from "@/components/builder/LayerToken";
+import AnsiLog from "@/components/builder/AnsiLog";
+import ColorChip from "@/components/builder/ColorChip";
+import { MetricsViewer, MetricsSummary } from "@/components/builder/Metrics";
 
 /**
  * Blocks & Builder — Library
@@ -27,195 +36,13 @@ import { X, Plus, ArrowUp, ArrowDown, Info, Wand2, Wrench, Layers as LayersIcon,
  * Color-coded categories; real names only.
  */
 
-// ---------------- Colors per category ----------------
-const CAT_COLORS = {
-  Convolution: { chip: "bg-blue-100 text-blue-700", ring: "ring-blue-200" },
-  Normalization: { chip: "bg-violet-100 text-violet-700", ring: "ring-violet-200" },
-  Activation: { chip: "bg-amber-100 text-amber-800", ring: "ring-amber-200" },
-  Pooling: { chip: "bg-teal-100 text-teal-800", ring: "ring-teal-200" },
-  Attention: { chip: "bg-rose-100 text-rose-700", ring: "ring-rose-200" },
-  Residual: { chip: "bg-slate-200 text-slate-800", ring: "ring-slate-300" },
-  Regularization: { chip: "bg-emerald-100 text-emerald-800", ring: "ring-emerald-200" },
-  Linear: { chip: "bg-fuchsia-100 text-fuchsia-800", ring: "ring-fuchsia-200" },
-  Meta: { chip: "bg-neutral-200 text-neutral-800", ring: "ring-neutral-300" },
-};
-const ColorChip = ({ category }) => <span className={`px-2 py-0.5 rounded-md text-[11px] ${CAT_COLORS[category]?.chip || CAT_COLORS.Meta.chip}`}>{category}</span>;
+// Colors and ColorChip moved to shared modules
 
-// ---------------- Layer library (expanded) ----------------
-const LAYERS = [
-  // Convolutions
-  { id: "conv", name: "Conv2d", category: "Convolution", role: "Learnable local features", op: "k×k, stride s, groups g", defaults: { k: 3, s: 1, g: 1, outC: 64 } },
-  { id: "pwconv", name: "Pointwise Conv (1×1)", category: "Convolution", role: "Channel mixing", op: "1×1", defaults: { k: 1, s: 1, g: 1, outC: 64 } },
-  { id: "dwconv", name: "Depthwise Conv", category: "Convolution", role: "Per-channel spatial conv", op: "k×k, groups=inC", defaults: { k: 3, s: 1 } },
-  { id: "grpconv", name: "Grouped Conv", category: "Convolution", role: "Split channels into groups", op: "k×k, groups>1", defaults: { k: 3, s: 1, g: 32, outC: 256 } },
-  { id: "dilconv", name: "Dilated Conv", category: "Convolution", role: "Expand receptive field", op: "k×k, dilation d", defaults: { k: 3, s: 1, d: 2, outC: 64 } },
-  { id: "deform", name: "Deformable Conv v2", category: "Convolution", role: "Learnable offsets", op: "DCNv2", defaults: { k: 3, s: 1, outC: 64 } },
+// Layer catalog moved to @/lib/constants
 
-  // Norms
-  { id: "bn", name: "BatchNorm2d", category: "Normalization", role: "Normalize activations", op: "(x−μ)/σ·γ+β" },
-  { id: "gn", name: "GroupNorm", category: "Normalization", role: "Batch-size agnostic", op: "Group-wise norm", defaults: { groups: 32 } },
-  { id: "ln", name: "LayerNorm", category: "Normalization", role: "Per-sample norm", op: "Across channels" },
+// Preset blocks moved to @/lib/constants
 
-  // Activations
-  { id: "relu", name: "ReLU", category: "Activation", role: "Non-linearity", op: "max(0,x)" },
-  { id: "gelu", name: "GELU", category: "Activation", role: "Smooth activation", op: "x·Φ(x)" },
-  { id: "silu", name: "SiLU (Swish)", category: "Activation", role: "Smooth gated", op: "x·sigmoid(x)" },
-  { id: "hswish", name: "Hardswish", category: "Activation", role: "Efficient swish", op: "x·ReLU6(x+3)/6" },
-  { id: "prelu", name: "PReLU", category: "Activation", role: "Learnable negative slope", op: "ax for x<0" },
-
-  // Pooling / reductions
-  { id: "maxpool", name: "MaxPool2d", category: "Pooling", role: "Downsample by max", op: "k×k s" },
-  { id: "avgpool", name: "AvgPool2d", category: "Pooling", role: "Downsample by avg", op: "k×k s" },
-  { id: "gap", name: "Global Avg Pool", category: "Pooling", role: "H×W → 1×1", op: "AdaptiveAvgPool2d(1)" },
-
-  // Attention & channel/spatial
-  { id: "se", name: "Squeeze-and-Excitation", category: "Regularization", role: "Channel attention", op: "GAP→MLP→sigmoid→scale", defaults: { r: 16 } },
-  { id: "eca", name: "ECA", category: "Regularization", role: "Efficient channel attention", op: "1D conv over channels" },
-  { id: "cbam", name: "CBAM", category: "Regularization", role: "Channel+Spatial attention", op: "SE + spatial mask" },
-  { id: "mhsa", name: "MHSA (2D)", category: "Attention", role: "Self-attention", op: "softmax(QK^T/√d)·V" },
-  { id: "winattn", name: "Windowed Attention", category: "Attention", role: "Local attention", op: "Swin-style windows" },
-
-  // Structure
-  { id: "add", name: "Residual Add", category: "Residual", role: "Skip connection", op: "x + F(x)", defaults: { from: null } },
-  { id: "concat", name: "Concatenate", category: "Residual", role: "Channel concat", op: "[x, F(x)]" },
-
-  // Linear head
-  { id: "linear", name: "Linear", category: "Linear", role: "Projection", op: "out = xW + b", defaults: { outF: 1000 } },
-
-  // Regularization
-  { id: "dropout", name: "Dropout", category: "Regularization", role: "Random feature drop", op: "p" },
-  { id: "droppath", name: "Stochastic Depth", category: "Regularization", role: "Randomly drop residual branch", op: "prob p" },
-];
-
-// ---------------- Famous preset blocks (Blocks tab) ----------------
-const PRESETS = [
-  {
-    id: "resnet_basic",
-    name: "ResNet BasicBlock",
-    family: "ResNet-18/34",
-    composition: ["conv","bn","relu","conv","bn","add","relu"],
-    strengths: ["Simple","Stable"],
-    drawbacks: ["Less params-efficient when very deep"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "resnet_bottleneck",
-    name: "ResNet Bottleneck",
-    family: "ResNet-50/101/152",
-    composition: ["pwconv","bn","relu","conv","bn","relu","pwconv","bn","add","relu"],
-    strengths: ["Efficient at scale"],
-    drawbacks: ["1×1 bandwidth","Memory"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "resnext",
-    name: "ResNeXt Bottleneck (cardinality)",
-    family: "ResNeXt",
-    composition: ["pwconv","bn","relu","grpconv","bn","relu","pwconv","bn","add","relu"],
-    strengths: ["Higher accuracy at similar cost"],
-    drawbacks: ["Group-conv perf variance"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "preact_bottleneck",
-    name: "Pre-activation Bottleneck",
-    family: "ResNet v2",
-    composition: ["bn","relu","pwconv","bn","relu","conv","bn","relu","pwconv","add"],
-    strengths: ["Smoother optimization"],
-    drawbacks: ["Layout-only change"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "mbv1",
-    name: "MobileNetV1 DW-Separable",
-    family: "MobileNetV1",
-    composition: ["dwconv","bn","relu","pwconv","bn","relu"],
-    strengths: ["Very efficient"],
-    drawbacks: ["Depthwise kernel perf sensitivity"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "mbv2",
-    name: "MobileNetV2 Inverted Residual",
-    family: "MobileNetV2",
-    composition: ["pwconv","bn","relu","dwconv","bn","relu","pwconv","bn","add"],
-    strengths: ["Edge efficiency"],
-    drawbacks: ["Linear bottleneck sensitivity"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "mbv3",
-    name: "MobileNetV3 Block (+SE, h-swish)",
-    family: "MobileNetV3",
-    composition: ["pwconv","bn","relu","dwconv","bn","se","hswish","pwconv","bn","add"],
-    strengths: ["Strong mobile accuracy"],
-    drawbacks: ["Extra complexity"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "efficient_mbconv",
-    name: "EfficientNet MBConv + SE (+SiLU)",
-    family: "EfficientNet",
-    composition: ["pwconv","bn","silu","dwconv","bn","se","silu","pwconv","bn","add"],
-    strengths: ["Accuracy/efficiency balance"],
-    drawbacks: ["Training sensitivity"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "convnext",
-    name: "ConvNeXt Block",
-    family: "ConvNeXt",
-    composition: ["dwconv","ln","pwconv","gelu","pwconv","droppath","add"],
-    strengths: ["Modern accuracy","Simple"],
-    drawbacks: ["DW perf varies"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "densenet_dense",
-    name: "DenseNet Dense Block (k growth)",
-    family: "DenseNet",
-    composition: ["bn","relu","conv","concat"],
-    strengths: ["Feature reuse"],
-    drawbacks: ["Memory footprint"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "inception_a",
-    name: "Inception-v3 Module (A)",
-    family: "InceptionV3",
-    composition: ["conv","conv","conv","concat","bn","relu"],
-    strengths: ["Multi-scale"],
-    drawbacks: ["Complex wiring"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "repvgg",
-    name: "RepVGG Block (train-time branches)",
-    family: "RepVGG",
-    composition: ["conv","bn","relu","conv","bn","relu","add"],
-    strengths: ["Re-parameterizable to 3×3"],
-    drawbacks: ["Reparam step"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "ghost",
-    name: "GhostNet Ghost Bottleneck",
-    family: "GhostNet",
-    composition: ["pwconv","relu","dwconv","pwconv","add"],
-    strengths: ["Cheap feature maps"],
-    drawbacks: ["Approximation artifacts"],
-    goodSlots: ["stage"],
-  },
-  {
-    id: "squeezenet_fire",
-    name: "SqueezeNet Fire Module",
-    family: "SqueezeNet",
-    composition: ["pwconv","relu","conv","conv","concat"],
-    strengths: ["Few params"],
-    drawbacks: ["Lower accuracy than modern nets"],
-    goodSlots: ["stage"],
-  },
-];
+// Model presets moved to @/lib/constants
 
 // ---------------- FLOPs/Params estimators (rough) ----------------
 const mm = (a,b)=>a*b; const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
@@ -227,26 +54,11 @@ function pwParams(inC,outC){ return inC*outC; }
 function pwFLOPs(H,W,inC,outC){ return H*W*inC*outC; }
 function seParams(C,r=16){ const hidden=Math.max(1,Math.floor(C/r)); return C*hidden + hidden*C; }
 
-// ---------------- Synergy rules (used in builder tips) ----------------
-const SYNERGIES = [
-  { need:["conv","bn"], why:"BatchNorm after Conv stabilizes stats; enables larger LR.", tag:"stability" },
-  { need:["dwconv","pwconv"], why:"Depthwise + pointwise forms an efficient separable conv.", tag:"efficiency" },
-  { need:["bn","relu"], why:"BN followed by ReLU is a robust pairing for CNNs.", tag:"stability" },
-  { need:["se"], why:"SE adds channel recalibration; often improves accuracy with minor cost.", tag:"accuracy" },
-  { need:["droppath","add"], why:"Stochastic depth regularizes residual paths in deep stacks.", tag:"regularization" },
-  { need:["mhsa","gelu"], why:"GELU pairs well with attention due to smoother gradients.", tag:"stability" },
-];
-
-// ---------------- Hyperparameter recipes ----------------
-const HP_PRESETS = [
-  { id:"resnet_modern", name:"ResNet (modern)", details:{ optimizer:"SGD", lr:0.1, momentum:0.9, weightDecay:1e-4, scheduler:"cosine", warmup:5, epochs:200, labelSmoothing:0.1, mixup:0.2, cutmix:0.2, ema:false } },
-  { id:"convnext_recipe", name:"ConvNeXt (AdamW)", details:{ optimizer:"AdamW", lr:0.001, weightDecay:0.05, scheduler:"cosine", warmup:20, epochs:300, stochasticDepth:0.1, autoAugment:true, ema:true } },
-  { id:"mobile_recipe", name:"MobileNetV3/EfficientNet", details:{ optimizer:"AdamW", lr:0.0015, weightDecay:0.05, scheduler:"cosine_warm_restarts", T0:10, Tmult:2, warmup:5, epochs:350, labelSmoothing:0.1, mixup:0.2, cutmix:0.2, ema:true } },
-];
+// Synergies, HP presets, and datasets moved to @/lib/constants
 
 // ---------------- Main App ----------------
 export default function BlocksBuilderLibrary(){
-  const [tab,setTab]=useState("blocks");
+  const [tab,setTab]=useState("build");
   const [code,setCode]=useState("");
   const [mainCode, setMainCode] = useState(
     `from runner.generated_block import GeneratedBlock, CIN, H, W
@@ -263,8 +75,14 @@ print('Output shape:', tuple(y.shape))`
 
   // Build Block state
   const [H,setH]=useState(56); const [W,setW]=useState(56); const [Cin,setCin]=useState(64);
+  const [inputMode, setInputMode] = useState('custom'); // 'dataset' | 'custom'
+  const [datasetId, setDatasetId] = useState('CIFAR10');
+  const dsInfo = DATASETS.find(d=>d.id===datasetId);
+  React.useEffect(()=>{
+    if(inputMode==='dataset' && dsInfo){ setH(dsInfo.H); setW(dsInfo.W); setCin(dsInfo.C); }
+  }, [inputMode, datasetId]);
   const [block,setBlock]=useState([]); // [{id, cfg}]
-  const [selectedIdx,setSelectedIdx]=useState(-1);
+  const [selectedIdx,setSelectedIdx] = useState(-1);
   const selected = selectedIdx>=0 ? block[selectedIdx] : null;
 
   // Saved Blocks library (persisted)
@@ -418,6 +236,71 @@ print('Output shape:', tuple(y.shape))`
     setTab('model');
   };
 
+  // Helper to offset residual 'from' indices by a base offset
+  function offsetAddIndices(steps, offset){
+    return steps.map(s=> (s.id==='add' && typeof s.cfg?.from==='number') ? ({ ...s, cfg: { ...s.cfg, from: s.cfg.from + offset } }) : s);
+  }
+
+  // Append a preset block to current Block builder
+  const appendPresetToBlock = (p)=>{
+    const built = p.composition.map(id=>({ id, cfg: { ...(LAYERS.find(l=>l.id===id)?.defaults||{}) } }));
+    const wired = autowireResiduals(built, H, W, Cin);
+    const adjusted = offsetAddIndices(wired, block.length);
+    setBlock(prev=>[...prev, ...adjusted]);
+    setSelectedIdx(-1);
+    setTab('build');
+  };
+
+  // Helper: build a block's steps from a preset id, overriding channels and optional first-layer stride
+  function buildBlockStepsFromPreset(presetId, outC, strideFirst=1){
+    const preset = PRESETS.find(pp=>pp.id===presetId);
+    if(!preset) return [];
+    let firstConvDone=false;
+    const steps = preset.composition.map(id=>{
+      const base = { id, cfg: { ...(LAYERS.find(l=>l.id===id)?.defaults||{}) } };
+      if((id==='conv' || id==='pwconv') && !firstConvDone){
+        firstConvDone = true;
+        base.cfg.outC = outC;
+        if(id==='conv') base.cfg.s = strideFirst;
+      } else if(id==='pwconv'){
+        // ensure final pointwise aligns to outC
+        base.cfg.outC = outC;
+      }
+      return base;
+    });
+    return autowireResiduals(steps, H, W, Cin);
+  }
+
+  // Build a full model from a model preset plan
+  function buildModelFromPreset(plan){
+    const out = [];
+    plan.forEach(seg=>{
+      if(seg.type==='layer'){
+        out.push({ type:'layer', id: seg.id, cfg: { ...(seg.cfg||{}) } });
+      } else if(seg.type==='blockRef'){
+        const repeat = seg.repeat || 1;
+        for(let i=0;i<repeat;i++){
+          const steps = buildBlockStepsFromPreset(seg.preset, seg.outC, seg.downsample && i===0 ? 2 : 1);
+          out.push({ type:'block', name: PRESETS.find(p=>p.id===seg.preset)?.name || seg.preset, steps });
+        }
+      }
+    });
+    return out;
+  }
+
+  // Use/append a model preset
+  const useModelPreset = (mp)=>{
+    const els = buildModelFromPreset(mp.plan);
+    setModel(els);
+    setModelSelIdx(-1);
+    setTab('model');
+  };
+  const appendModelPreset = (mp)=>{
+    const els = buildModelFromPreset(mp.plan);
+    setModel(prev=>[...prev, ...els]);
+    setTab('model');
+  };
+
   // Simulate shapes to wire residual connections
   function autowireResiduals(steps, H0, W0, C0){
     let h=H0, w=W0, c=C0;
@@ -553,7 +436,7 @@ print('Output shape:', tuple(y.shape))`
   };
 
   // Hyperparameters tab
-  const [hp,setHp]=useState({ optimizer:"SGD", lr:0.1, momentum:0.9, weightDecay:1e-4, scheduler:"cosine", warmup:5, epochs:200, labelSmoothing:0.1, mixup:0.0, cutmix:0.0, stochasticDepth:0.0, ema:false, cosineRestarts:false, T0:10, Tmult:2 });
+  const [hp,setHp]=useState({ optimizer:"SGD", lr:0.1, momentum:0.9, weightDecay:1e-4, scheduler:"cosine", warmup:5, epochs:50, labelSmoothing:0.0, mixup:0.0, cutmix:0.0, stochasticDepth:0.0, ema:false, cosineRestarts:false, T0:10, Tmult:2, batchSize:128, numWorkers:2, loss:"CrossEntropy", valSplit:0.1, gradClip:0.0, stepSize:30, gamma:0.1 });
   const applyPreset = (p)=>{ setHp(prev=>({ ...prev, ...p.details, cosineRestarts: p.details.scheduler==="cosine_warm_restarts" })); };
 
   const exportJSON = ()=>{
@@ -578,7 +461,7 @@ print('Output shape:', tuple(y.shape))`
       <div className="px-4 py-3 border-b bg-white flex items-center gap-3 sticky top-0 z-10">
         <LayersIcon className="w-5 h-5"/>
         <div className="text-lg font-semibold">Blocks & Builder — Library</div>
-        <Badge variant="secondary">Presets • Build • Hyperparameters</Badge>
+  <Badge variant="secondary">Presets • Build • Hyperparameters • Train</Badge>
         <div className="ml-auto"><Button variant="outline" onClick={exportJSON}><Download className="w-4 h-4 mr-2"/>Export</Button></div>
       </div>
 
@@ -587,61 +470,69 @@ print('Output shape:', tuple(y.shape))`
           <Card>
             <CardHeader><CardTitle className="flex items-center gap-2"><Info className="w-4 h-4"/>Input / Builder Settings</CardTitle></CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <div className="grid grid-cols-3 gap-2">
-                <div><div className="text-xs">H</div><Input type="number" value={H} onChange={e=>setH(parseInt(e.target.value||"56",10))}/></div>
-                <div><div className="text-xs">W</div><Input type="number" value={W} onChange={e=>setW(parseInt(e.target.value||"56",10))}/></div>
-                <div><div className="text-xs">Channels</div><Input type="number" value={Cin} onChange={e=>setCin(parseInt(e.target.value||"64",10))}/></div>
+              <div>
+                <div className="text-xs mb-1">Mode</div>
+                <Select value={inputMode} onValueChange={setInputMode}>
+                  <SelectTrigger className="w-full"><SelectValue/></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="dataset">Dataset (enables training)</SelectItem>
+                    <SelectItem value="custom">Custom (random tensors; no training)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="text-xs text-neutral-600">These sizes drive rough params/FLOPs shown in Build tab.</div>
+              {inputMode==='dataset' ? (
+                <>
+                  <div>
+                    <div className="text-xs mb-1">Dataset</div>
+                    <Select value={datasetId} onValueChange={setDatasetId}>
+                      <SelectTrigger className="w-full"><SelectValue/></SelectTrigger>
+                      <SelectContent>
+                        {DATASETS.map(d=> <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 opacity-80">
+                    <div><div className="text-xs">H</div><Input readOnly value={H}/></div>
+                    <div><div className="text-xs">W</div><Input readOnly value={W}/></div>
+                    <div><div className="text-xs">Channels</div><Input readOnly value={Cin}/></div>
+                  </div>
+                  <div className="text-xs text-neutral-600">Sizes derive from the selected dataset. Training will generate code accordingly.</div>
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div><div className="text-xs">H</div><Input type="number" value={H} onChange={e=>setH(parseInt(e.target.value||"56",10))}/></div>
+                    <div><div className="text-xs">W</div><Input type="number" value={W} onChange={e=>setW(parseInt(e.target.value||"56",10))}/></div>
+                    <div><div className="text-xs">Channels</div><Input type="number" value={Cin} onChange={e=>setCin(parseInt(e.target.value||"64",10))}/></div>
+                  </div>
+                  <div className="text-xs text-neutral-600">Custom shapes disable dataset training/testing. Use PyTorch tab to run forward only.</div>
+                </>
+              )}
             </CardContent>
           </Card>
 
-          <Palette addLayer={addLayer} />
+          <Palette addLayer={tab==='model' ? addModelLayer : addLayer} mode={tab==='model' ? 'model' : 'build'} />
         </div>
 
         <div className="col-span-9">
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList>
-              <TabsTrigger value="blocks"><Blocks className="w-4 h-4 mr-1"/>Blocks</TabsTrigger>
-              <TabsTrigger value="build"><Wrench className="w-4 h-4 mr-1"/>Build Block</TabsTrigger>
+              <TabsTrigger value="build"><Wrench className="w-4 h-4 mr-1"/>Build Blocks</TabsTrigger>
               <TabsTrigger value="model"><Boxes className="w-4 h-4 mr-1"/>Build Model</TabsTrigger>
               <TabsTrigger value="hparams"><Settings2 className="w-4 h-4 mr-1"/>Hyperparameters</TabsTrigger>
+              <TabsTrigger value="training"><LineChart className="w-4 h-4 mr-1"/>Training</TabsTrigger>
               <TabsTrigger value="code"><Wrench className="w-4 h-4 mr-1"/>PyTorch</TabsTrigger>
             </TabsList>
 
-            {/* Blocks tab: famous presets */}
-            <TabsContent value="blocks">
-              <Card>
-                <CardHeader><CardTitle>Preset Blocks from Famous Architectures</CardTitle></CardHeader>
-                <CardContent className="grid grid-cols-2 gap-3">
-                  {PRESETS.map(p=> (
-                    <div key={p.id} className="border border-neutral-200 rounded-2xl p-3 bg-white/90 backdrop-blur-sm shadow-sm hover:shadow-md transition">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-medium">{p.name}</div>
-                          <div className="text-xs text-neutral-600">{p.family}</div>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button size="sm" variant="secondary" onClick={()=>importPreset(p)}><Wand2 className="w-4 h-4 mr-1"/>Build</Button>
-                          <Button size="sm" variant="outline" onClick={()=>addPresetToModel(p)} title="Append this preset to the Model tab">To Model</Button>
-                        </div>
-                      </div>
-                      <div className="text-xs mt-1"><b>Composition:</b> {p.composition.map(id=>LAYERS.find(l=>l.id===id)?.name||id).join(" → ")}</div>
-                      <div className="text-[11px]"><b>Strengths:</b> {p.strengths.join(", ")}</div>
-                      <div className="text-[11px]"><b>Drawbacks:</b> {p.drawbacks.join(", ")}</div>
-                      <div className="text-[11px]"><b>Good slots:</b> {p.goodSlots.join(", ")}</div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            {/* Build tab: construct block */}
+            {/* Build Blocks tab: construct block with preset list on the right */}
             <TabsContent value="build">
               <div className="grid grid-cols-5 gap-3">
                 <div className="col-span-3">
                   <Card>
-                    <CardHeader><CardTitle>Current Block</CardTitle></CardHeader>
+                    <CardHeader>
+                      <CardTitle>Current Block</CardTitle>
+                      <div className="text-xs text-neutral-600 mt-1">Use the Layer Palette on the left, or pick a Preset Block on the right.</div>
+                    </CardHeader>
                     <CardContent className="space-y-2">
                       {block.length===0 && <div className="text-neutral-600 text-sm">Add layers from the left palette or import a preset.</div>}
             {block.map((s,i)=>{
@@ -705,7 +596,8 @@ print('Output shape:', tuple(y.shape))`
                   </Card>
                 </div>
 
-                <div className="col-span-2">
+                <div className="col-span-2 space-y-3">
+                  <PresetBlocksPanel onUse={(p)=>importPreset(p)} onAppend={(p)=>appendPresetToBlock(p)} />
                   <Card>
                     <CardHeader><CardTitle>Inspector & Config</CardTitle></CardHeader>
                     <CardContent className="text-sm space-y-3">
@@ -776,9 +668,13 @@ print('Output shape:', tuple(y.shape))`
                         // block element
                         return (
                           <div key={`B${i}`} className={`border border-neutral-200 rounded-xl p-2 bg-white/90 backdrop-blur-sm flex items-center justify-between shadow-sm hover:shadow-md transition`}>
-                            <div>
+                            <div className="min-w-0">
                               <div className="text-sm font-medium flex items-center gap-2"><Box className="w-4 h-4"/>{el.name}<span className="px-2 py-0.5 rounded-md text-[11px] bg-neutral-200 text-neutral-800">Block</span></div>
-                              <div className="text-xs text-neutral-600">{el.steps.map(s=>LAYERS.find(x=>x.id===s.id)?.name||s.id).join(' → ')}</div>
+                              <div className="mt-1 flex flex-wrap gap-1.5 items-center">
+                                {el.steps.map((s, idx)=> (
+                                  <LayerToken key={idx} id={s.id} cfg={s.cfg} size="md" />
+                                ))}
+                              </div>
                             </div>
                             <div className="flex items-center gap-1">
                               <Button size="sm" variant="outline" onClick={()=>expandBlockAt(i)} title="Expand this block into its layers so you can edit or insert between">Expand</Button>
@@ -799,6 +695,7 @@ print('Output shape:', tuple(y.shape))`
                       <div>Output shape: ({modelStats.outC}, {modelStats.H}, {modelStats.W})</div>
                       <div>Params: {(modelStats.params/1e6).toFixed(3)} M (rough)</div>
                       <div>FLOPs: {(modelStats.flops/1e9).toFixed(3)} GFLOPs @ {H}×{W}</div>
+                      <div>Est. memory (batch {hp.batchSize}): {formatMem(estimateMemoryMB(modelStats, hp.batchSize))}</div>
                       <div>Issues: {modelStats.issues.length===0 ? <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle className="w-3.5 h-3.5"/>None</span> : <span className="inline-flex items-center gap-1 text-rose-700"><AlertTriangle className="w-3.5 h-3.5"/>{modelStats.issues.length}</span>}</div>
                     </CardContent>
                   </Card>
@@ -832,24 +729,46 @@ print('Output shape:', tuple(y.shape))`
                         <div className="font-medium text-sm mb-1 flex items-center gap-2"><Blocks className="w-4 h-4"/>Preset Blocks</div>
                         <div className="space-y-2 max-h-[24vh] overflow-auto pr-1">
                           {PRESETS.map(p=> (
-                            <div key={p.id} className="border border-neutral-200 rounded-md p-2 bg-white/90 flex items-center justify-between">
-                              <div>
-                                <div className="text-sm font-medium">{p.name}</div>
-                                <div className="text-[11px] text-neutral-600 truncate">{p.family}</div>
+                            <div key={p.id} className="border border-neutral-200 rounded-md p-2 bg-white/90">
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <div className="text-sm font-medium">{p.name}</div>
+                                  <div className="text-[11px] text-neutral-600">{p.family}</div>
+                                </div>
+                                <Button size="sm" variant="outline" onClick={()=>addPresetToModel(p)}>Add</Button>
                               </div>
-                              <Button size="sm" variant="outline" onClick={()=>addPresetToModel(p)}>Add</Button>
+                              <div className="mt-2 flex flex-wrap gap-1.5 items-center">
+                                {p.composition.map((id, idx)=> (
+                                  <LayerToken key={idx} id={id} size="md" />
+                                ))}
+                              </div>
                             </div>
                           ))}
                         </div>
                       </div>
 
+                      {/* Palette removed here; use the left-side palette instead */}
+                      <div className="text-xs text-neutral-600 border rounded-xl p-2">
+                        Use the Layer Palette on the left. It will add to
+                        {" "}
+                        <b>{tab==='model' ? 'Build Model' : 'Build Block'}</b>
+                        {" "}
+                        depending on the active tab.
+                      </div>
+
                       <div className="border rounded-xl p-2">
-                        <div className="font-medium text-sm mb-1 flex items-center gap-2"><LayersIcon className="w-4 h-4"/>Add Single Layer</div>
-                        <div className="grid grid-cols-1 gap-2 max-h-[24vh] overflow-auto pr-1">
-                          {LAYERS.map(l=> (
-                            <div key={l.id} className="flex items-center justify-between border border-neutral-200 rounded-md p-2 bg-white/90">
-                              <div className="text-sm flex items-center gap-2">{l.name}<ColorChip category={l.category}/></div>
-                              <Button size="sm" variant="outline" onClick={()=>addModelLayer(l.id)}><Plus className="w-4 h-4 mr-1"/>Add</Button>
+                        <div className="font-medium text-sm mb-1 flex items-center gap-2"><Boxes className="w-4 h-4"/>Preset Models</div>
+                        <div className="space-y-2 max-h-[24vh] overflow-auto pr-1">
+                          {MODEL_PRESETS.map(mp=> (
+                            <div key={mp.id} className="border border-neutral-200 rounded-md p-2 bg-white/90 flex items-center justify-between">
+                              <div>
+                                <div className="text-sm font-medium">{mp.name}</div>
+                                <div className="text-[11px] text-neutral-600 truncate">{mp.family} — {mp.description}</div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button size="sm" variant="secondary" onClick={()=>useModelPreset(mp)}>Use</Button>
+                                <Button size="sm" variant="outline" onClick={()=>appendModelPreset(mp)}>Append</Button>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -900,6 +819,14 @@ print('Output shape:', tuple(y.shape))`
                         <div className="text-xs">Learning rate</div>
                         <Input type="number" value={hp.lr} onChange={(e)=>setHp({...hp, lr:parseFloat(e.target.value||"0")})}/>
                       </div>
+                      <div>
+                        <div className="text-xs">Batch size</div>
+                        <Input type="number" value={hp.batchSize} onChange={(e)=>setHp({...hp, batchSize:parseInt(e.target.value||"128",10)})}/>
+                      </div>
+                      <div>
+                        <div className="text-xs">Data workers</div>
+                        <Input type="number" value={hp.numWorkers} onChange={(e)=>setHp({...hp, numWorkers:parseInt(e.target.value||"2",10)})}/>
+                      </div>
                       {hp.optimizer==="SGD" && (
                         <>
                           <div>
@@ -911,6 +838,17 @@ print('Output shape:', tuple(y.shape))`
                       <div>
                         <div className="text-xs">Weight decay</div>
                         <Input type="number" value={hp.weightDecay} onChange={(e)=>setHp({...hp, weightDecay:parseFloat(e.target.value||"0")})}/>
+                      </div>
+                      <div>
+                        <div className="text-xs">Loss</div>
+                        <Select value={hp.loss} onValueChange={(v)=>setHp({...hp, loss:v})}>
+                          <SelectTrigger className="w-full"><SelectValue/></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="CrossEntropy">CrossEntropy</SelectItem>
+                            <SelectItem value="MSE">MSE</SelectItem>
+                            <SelectItem value="BCEWithLogits">BCEWithLogits</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
                       <div>
                         <div className="text-xs">Scheduler</div>
@@ -935,6 +873,18 @@ print('Output shape:', tuple(y.shape))`
                           </div>
                         </>
                       )}
+                      {hp.scheduler==="step" && (
+                        <>
+                          <div>
+                            <div className="text-xs">Step size (epochs)</div>
+                            <Input type="number" value={hp.stepSize} onChange={(e)=>setHp({...hp, stepSize:parseInt(e.target.value||"30",10)})}/>
+                          </div>
+                          <div>
+                            <div className="text-xs">Gamma</div>
+                            <Input type="number" value={hp.gamma} onChange={(e)=>setHp({...hp, gamma:parseFloat(e.target.value||"0.1")})}/>
+                          </div>
+                        </>
+                      )}
                       <div>
                         <div className="text-xs">Warmup (epochs)</div>
                         <Input type="number" value={hp.warmup} onChange={(e)=>setHp({...hp, warmup:parseInt(e.target.value||"0",10)})}/>
@@ -942,6 +892,14 @@ print('Output shape:', tuple(y.shape))`
                       <div>
                         <div className="text-xs">Total epochs</div>
                         <Input type="number" value={hp.epochs} onChange={(e)=>setHp({...hp, epochs:parseInt(e.target.value||"0",10)})}/>
+                      </div>
+                      <div>
+                        <div className="text-xs">Validation split</div>
+                        <Input type="number" value={hp.valSplit} onChange={(e)=>setHp({...hp, valSplit:Math.min(0.5, Math.max(0.01, parseFloat(e.target.value||"0.1")))})}/>
+                      </div>
+                      <div>
+                        <div className="text-xs">Grad clip (0 to disable)</div>
+                        <Input type="number" value={hp.gradClip} onChange={(e)=>setHp({...hp, gradClip:parseFloat(e.target.value||"0.0")})}/>
                       </div>
                       <div>
                         <div className="text-xs">Label smoothing</div>
@@ -959,7 +917,7 @@ print('Output shape:', tuple(y.shape))`
                         <div className="text-xs">Stochastic Depth</div>
                         <Slider value={[hp.stochasticDepth]} min={0} max={0.3} step={0.01} onValueChange={([v])=>setHp({...hp, stochasticDepth:v})}/>
                         <div className="text-xs mt-1">{hp.stochasticDepth.toFixed(2)}</div>
-                      </div>
+                                           </div>
                       <div className="flex items-center gap-2">
                         <Switch checked={hp.ema} onCheckedChange={(v)=>setHp({...hp, ema:v})}/> <span>EMA</span>
                       </div>
@@ -994,18 +952,41 @@ print('Output shape:', tuple(y.shape))`
               </div>
             </TabsContent>
 
+            {/* Training curves/results tab */}
+            <TabsContent value="training">
+              <div className="grid grid-cols-5 gap-3">
+                <div className="col-span-3">
+                  <Card>
+                    <CardHeader><CardTitle>Training Curves</CardTitle></CardHeader>
+                    <CardContent className="text-sm">
+                      <MetricsViewer />
+                      <div className="text-xs text-neutral-600 mt-2">Curves parse lines starting with "METRIC:" from Run Output.</div>
+                    </CardContent>
+                  </Card>
+                </div>
+                <div className="col-span-2">
+                  <Card>
+                    <CardHeader><CardTitle>Testing Results</CardTitle></CardHeader>
+                    <CardContent className="text-sm">
+                      <MetricsSummary />
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            </TabsContent>
+
             {/* PyTorch preview tab */}
             <TabsContent value="code">
               <div className="grid grid-cols-5 gap-3">
                 <div className="col-span-3">
                   <Card>
-                    <CardHeader><CardTitle>GeneratedBlock (auto-generated)</CardTitle></CardHeader>
+          <CardHeader><CardTitle>GeneratedBlock (auto-generated)</CardTitle></CardHeader>
                     <CardContent>
                       <div className="flex items-center gap-2 mb-2">
                         <Button variant="secondary" onClick={()=>copyText(code)}>Copy</Button>
                         <Button variant="outline" onClick={()=>downloadText('generated_block.py', code)}>Download .py</Button>
                         <Button onClick={()=>saveGenerated(code)} variant="default">Save to runner/generated_block.py</Button>
-                        <Button variant="secondary" onClick={()=>runPython(code, mainCode)} title="Runs in a uv-managed venv on CPU">Run (CPU)</Button>
+            <Button variant="secondary" onClick={()=>runPython(code, mainCode)} title="Runs in a uv-managed venv on CPU"><PlayCircle className="w-4 h-4 mr-1"/>Run</Button>
                       </div>
                       <CodeEditor language="python" value={code} onChange={setCode} className="h-[30vh]"/>
                       <div className="text-xs text-neutral-500 mt-1">This file now emits CIN/H/W, a GeneratedBlock for the Build tab, and if a Model is defined, a GeneratedModel class that flattens blocks and layers.</div>
@@ -1013,15 +994,18 @@ print('Output shape:', tuple(y.shape))`
                   </Card>
 
                   <Card className="mt-3">
-                    <CardHeader><CardTitle>main.py (optional entrypoint)</CardTitle></CardHeader>
+                    <CardHeader><CardTitle>Training/Testing Script (main.py)</CardTitle></CardHeader>
                     <CardContent>
                       <div className="flex items-center gap-2 mb-2">
                         <Button variant="secondary" onClick={()=>copyText(mainCode)}>Copy</Button>
                         <Button variant="outline" onClick={()=>downloadText('main.py', mainCode)}>Download main.py</Button>
                         <Button onClick={()=>saveMain(mainCode)} variant="default">Save to .runner/main.py</Button>
+                        <Button variant="secondary" onClick={()=> setMainCode(generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datasetId })) } title={inputMode==='dataset'? 'Generate training code for dataset' : 'Custom mode uses random tensors; training disabled'} disabled={inputMode!=='dataset'}>
+                          Generate Training Script
+                        </Button>
                       </div>
                       <CodeEditor language="python" value={mainCode} onChange={setMainCode} className="h-[26vh]"/>
-                      <div className="text-xs text-neutral-500 mt-1">Tip: explain or script your own workflow here. When present, the runner executes this script.</div>
+                      <div className="text-xs text-neutral-500 mt-1">Tip: use the generator to refresh code when you change datasets or hyperparameters.</div>
                     </CardContent>
                   </Card>
                 </div>
@@ -1082,76 +1066,16 @@ async function runPython(text, main){
 }
 
 // Polls ANSI-colored output file and renders colorized lines
-function AnsiLog({ url }){
-  const [text,setText]=React.useState('')
-  React.useEffect(()=>{
-    let alive=true
-    const tick=()=>{
-      fetch(url, { cache: 'no-store' })
-        .then(r=>r.text())
-        .then(t=>{ if(alive) setText(t) })
-        .catch(()=>{})
-    }
-    tick()
-    const id = setInterval(tick, 1000)
-    return ()=>{ alive=false; clearInterval(id) }
-  },[url])
-  return (
-    <pre className="h-[40vh] overflow-auto rounded-xl border border-neutral-200 bg-black text-white p-2 text-xs">
-      <code dangerouslySetInnerHTML={{ __html: ansiToHtml(text) }} />
-    </pre>
-  )
-}
-
-// minimal ANSI to HTML coloring
-function ansiToHtml(s){
-  // escape HTML first, then inject spans for ANSI codes
-  const esc = (x)=> x
-    .replaceAll(/&/g,'&amp;')
-    .replaceAll(/</g,'&lt;')
-    .replaceAll(/>/g,'&gt;')
-  let t = esc(String(s ?? ''))
-  t = t
-    .replaceAll(/\x1b\[31m/g, '<span style="color:#f87171">')
-    .replaceAll(/\x1b\[32m/g, '<span style="color:#34d399">')
-    .replaceAll(/\x1b\[33m/g, '<span style="color:#fbbf24">')
-    .replaceAll(/\x1b\[0m/g, '</span>')
-  return t
-}
+// Metrics and log moved to components; fmt moved to utils
 
 // ---------------- Palette ----------------
-function Palette({ addLayer }){
-  const [cat,setCat]=useState("All");
-  const [q,setQ]=useState("");
-  const list = useMemo(()=> LAYERS.filter(l=> (cat==="All"||l.category===cat) && (q==="" || [l.name,l.role,l.op].join(" ").toLowerCase().includes(q.toLowerCase())) ), [cat,q]);
-  return (
-    <Card className="flex-1">
-      <CardHeader><CardTitle>Layer Palette</CardTitle></CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        <div className="grid grid-cols-2 gap-2">
-          <Select value={cat} onValueChange={setCat}>
-            <SelectTrigger className="w-full"><SelectValue/></SelectTrigger>
-            <SelectContent>
-              {['All',...new Set(LAYERS.map(l=>l.category))].map(c=> <SelectItem key={c} value={c}>{c}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Input placeholder="Search layers" value={q} onChange={(e)=>setQ(e.target.value)}/>
-        </div>
-    <div className="max-h-[50vh] overflow-auto space-y-2 pr-1 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-neutral-100 [&::-webkit-scrollbar-thumb]:bg-neutral-300 [&::-webkit-scrollbar-thumb]:rounded">
-          {list.map(l=> (
-      <div key={l.id} className={`border border-neutral-200 rounded-xl p-2 bg-white/90 backdrop-blur-sm flex items-center justify-between shadow-sm hover:shadow-md transition ${CAT_COLORS[l.category]?.ring||''}`}>
-              <div>
-                <div className="font-medium text-sm flex items-center gap-2">{l.name}<ColorChip category={l.category}/></div>
-                <div className="text-[11px] text-neutral-600">{l.role}</div>
-              </div>
-              <Button size="sm" variant="outline" onClick={()=>addLayer(l.id)}><Plus className="w-4 h-4 mr-1"/>Add</Button>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+// Palette moved to components
+
+// ---------------- Preset Blocks Panel ----------------
+// PresetBlocksPanel moved to components
+
+// Compact preview of a block's composition as a list of layer rows
+// BlockLayersPreview moved to components
 
 // ---------------- Layer Config ----------------
 function LayerConfig({ selected, onChange, selectedIdx, block, stats }){
@@ -1238,16 +1162,7 @@ function renderStepSummary(l, s){
 }
 
 // ---------- Utilities: copy/download ----------
-function copyText(text){
-  try { navigator.clipboard?.writeText(text); } catch(e) { /* no-op */ }
-}
-function downloadText(filename, text){
-  const blob = new Blob([text], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
+// copy/download moved to utils
 
 // ---------- PyTorch code generator ----------
 function generateTorch(block, H, W, Cin){
@@ -1457,6 +1372,132 @@ function generateTorchAll(block, modelEls, H, W, Cin){
     emit('        return x');
   }
 
+  return lines.join('\n');
+}
+
+// Estimate memory (MB): params + activations across steps for batch size
+function estimateMemoryMB(stats, batch){
+  const bytesPer = 4; // float32
+  const paramsMB = (stats.params * bytesPer) / (1024*1024);
+  const actsMB = (stats.outShapes||[]).reduce((acc, s)=> acc + (s ? (s.C * s.H * s.W * batch * bytesPer) : 0), 0) / (1024*1024);
+  return paramsMB + actsMB;
+}
+function formatMem(mb){ if(!isFinite(mb)) return '-'; return mb>1024 ? (mb/1024).toFixed(2)+ ' GB' : mb.toFixed(1)+' MB'; }
+
+// Generate a training/testing script based on UI
+function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datasetId }){
+  const dsName = datasetId || 'CIFAR10';
+  const hasModel = (model && model.length>0);
+  const numClasses = (DATASETS.find(d=>d.id===dsName)?.classes)||10;
+  const netClass = hasModel ? 'GeneratedModel' : 'GeneratedBlock';
+  const lines=[]; const emit=(s='')=>lines.push(s);
+  emit('import torch');
+  emit('import torch.nn as nn');
+  emit('import torch.optim as optim');
+  emit('from torch.utils.data import DataLoader, random_split');
+  emit('import torchvision');
+  emit('import torchvision.transforms as T');
+  emit('from runner.generated_block import GeneratedBlock, CIN, H, W' + (hasModel? ', GeneratedModel':'') );
+  emit('');
+  emit('def get_datasets(root="./data", val_split='+hp.valSplit.toString()+'):');
+  emit(`    mean_std = { 'CIFAR10': ([0.4914,0.4822,0.4465],[0.247,0.243,0.261]), 'CIFAR100': ([0.507,0.487,0.441],[0.267,0.256,0.276]), 'MNIST': ([0.1307],[0.3081]), 'FashionMNIST': ([0.2860],[0.3530]), 'STL10': ([0.4467,0.4398,0.4066],[0.2603,0.2566,0.2713]) }`);
+  emit(`    mean,std = mean_std.get('${dsName}', ([0.5]*${Cin}, [0.5]*${Cin}))`);
+  emit('    tf_train = T.Compose([T.ToTensor(), T.Normalize(mean, std)])');
+  emit('    tf_test  = T.Compose([T.ToTensor(), T.Normalize(mean, std)])');
+  if (dsName==='CIFAR10'){
+    emit('    full = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=tf_train)');
+    emit('    test = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=tf_test)');
+  } else if (dsName==='CIFAR100'){
+    emit('    full = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=tf_train)');
+    emit('    test = torchvision.datasets.CIFAR100(root=root, train=False, download=True, transform=tf_test)');
+  } else if (dsName==='MNIST'){
+    emit('    full = torchvision.datasets.MNIST(root=root, train=True, download=True, transform=tf_train)');
+    emit('    test = torchvision.datasets.MNIST(root=root, train=False, download=True, transform=tf_test)');
+  } else if (dsName==='FashionMNIST'){
+    emit('    full = torchvision.datasets.FashionMNIST(root=root, train=True, download=True, transform=tf_train)');
+    emit('    test = torchvision.datasets.FashionMNIST(root=root, train=False, download=True, transform=tf_test)');
+  } else if (dsName==='STL10'){
+    emit("    full = torchvision.datasets.STL10(root=root, split='train', download=True, transform=tf_train)");
+    emit("    test = torchvision.datasets.STL10(root=root, split='test', download=True, transform=tf_test)");
+  } else {
+    emit(`    raise ValueError('Unsupported dataset: ${dsName}')`);
+  }
+  emit('    n_val = max(1, int(len(full) * val_split))');
+  emit('    n_train = len(full) - n_val');
+  emit('    train, val = random_split(full, [n_train, n_val], generator=torch.Generator().manual_seed(42))');
+  emit('    return train, val, test');
+  emit('');
+  emit('def get_model(device):');
+  emit(`    model = ${netClass}(in_channels=CIN)`);
+  emit('    return model.to(device)');
+  emit('');
+  emit('def get_loss():');
+  if(hp.loss==='MSE') emit('    return nn.MSELoss()');
+  else if(hp.loss==='BCEWithLogits') emit('    return nn.BCEWithLogitsLoss()');
+  else emit('    return nn.CrossEntropyLoss()');
+  emit('');
+  emit('def get_optimizer(model):');
+  if(hp.optimizer==='AdamW') emit(`    return optim.AdamW(model.parameters(), lr=${hp.lr}, weight_decay=${hp.weightDecay})`);
+  else emit(`    return optim.SGD(model.parameters(), lr=${hp.lr}, momentum=${hp.momentum??0.9}, weight_decay=${hp.weightDecay})`);
+  emit('');
+  emit('def get_scheduler(opt):');
+  if(hp.scheduler==='cosine_warm_restarts') emit(`    return optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=${hp.T0}, T_mult=${hp.Tmult})`);
+  else if(hp.scheduler==='step') emit(`    return optim.lr_scheduler.StepLR(opt, step_size=${hp.stepSize}, gamma=${hp.gamma})`);
+  else emit('    return optim.lr_scheduler.CosineAnnealingLR(opt, T_max=10)');
+  emit('');
+  emit('def accuracy(logits, targets):');
+  emit('    if logits.dim()>2: logits = logits.mean(dim=(-1,-2))');
+  emit('    preds = logits.argmax(dim=1)');
+  emit('    return (preds==targets).float().mean().item()');
+  emit('');
+  emit('def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip=0.0):');
+  emit('    model.train(); total=0.0');
+  emit('    for x,y in loader:');
+  emit('        x=x.to(device); y=y.to(device)');
+  emit('        optimizer.zero_grad()');
+  emit('        out = model(x)');
+  emit('        if out.dim()>2: out = out.mean(dim=(-1,-2))');
+  emit('        loss = criterion(out, y)');
+  emit('        loss.backward()');
+  emit('        if grad_clip>0: nn.utils.clip_grad_norm_(model.parameters(), grad_clip)');
+  emit('        optimizer.step()');
+  emit('        total += loss.item() * x.size(0)');
+  emit('    return total / len(loader.dataset)');
+  emit('');
+  emit('def evaluate(model, loader, criterion, device):');
+  emit('    model.eval(); total=0.0; accs=0.0');
+  emit('    with torch.no_grad():');
+  emit('        for x,y in loader:');
+  emit('            x=x.to(device); y=y.to(device)');
+  emit('            out = model(x)');
+  emit('            if out.dim()>2: out = out.mean(dim=(-1,-2))');
+  emit('            loss = criterion(out, y)');
+  emit('            total += loss.item() * x.size(0)');
+  emit('            accs += accuracy(out, y) * x.size(0)');
+  emit('    return total/len(loader.dataset), accs/len(loader.dataset)');
+  emit('');
+  emit('def main():');
+  emit('    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")');
+  emit('    train_ds, val_ds, test_ds = get_datasets()');
+  emit(`    train_loader = DataLoader(train_ds, batch_size=${hp.batchSize}, shuffle=True, num_workers=${hp.numWorkers}, pin_memory=True)`);
+  emit(`    val_loader = DataLoader(val_ds, batch_size=${hp.batchSize}, shuffle=False, num_workers=${hp.numWorkers})`);
+  emit(`    test_loader = DataLoader(test_ds, batch_size=${hp.batchSize}, shuffle=False, num_workers=${hp.numWorkers})`);
+  emit('    model = get_model(device)');
+  emit('    criterion = get_loss()');
+  emit('    optimizer = get_optimizer(model)');
+  emit('    scheduler = get_scheduler(optimizer)');
+  emit('    best=0.0');
+  emit(`    for epoch in range(1, ${hp.epochs}+1):`);
+  emit(`        tr_loss = train_one_epoch(model, train_loader, criterion, optimizer, device, grad_clip=${hp.gradClip})`);
+  emit('        val_loss, val_acc = evaluate(model, val_loader, criterion, device)');
+  emit('        try: scheduler.step()\n        except Exception: pass');
+  emit('        print(f"METRIC: epoch={epoch} train_loss={tr_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")')
+  emit('        if val_acc>best: best=val_acc; print(f"BEST: val_acc={best:.4f}")')
+  emit('    tl, ta = evaluate(model, test_loader, criterion, device)');
+  emit('    print(f"TEST: acc={ta:.4f} loss={tl:.4f}")');
+  emit('');
+  emit('if __name__ == "__main__":');
+  emit('    main()');
   return lines.join('\n');
 }
 

@@ -1,4 +1,4 @@
-import os, sys, traceback, importlib.util, types, time
+import os, sys, traceback, importlib.util, types, time, runpy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,10 +35,11 @@ def main():
         tee_write("[runner] Starting...\n")
         if MAIN_PATH.exists():
             write_line(ANSI_YELLOW + "[runner] Running .runner/main.py" + ANSI_RESET)
-            # Ensure .runner is on sys.path for 'from .runner import generated_block' style imports if used
-            sys.path.insert(0, str(ROOT))
-            code = MAIN_PATH.read_text()
-            exec(compile(code, str(MAIN_PATH), 'exec'), {})
+            # Ensure project root on path so `import runner.generated_block` works
+            if str(ROOT) not in sys.path:
+                sys.path.insert(0, str(ROOT))
+            # Execute the script with __name__ == "__main__" so its guard runs
+            runpy.run_path(str(MAIN_PATH), run_name="__main__")
             write_line(ANSI_GREEN + "[runner] main.py finished" + ANSI_RESET)
         else:
             write_line(ANSI_YELLOW + "[runner] Loading generated module..." + ANSI_RESET)

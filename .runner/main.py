@@ -1,10 +1,87 @@
-from runner.generated_block import GeneratedBlock, CIN, H, W
 import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, random_split
+import torchvision
+import torchvision.transforms as T
+from runner.generated_block import GeneratedBlock, CIN, H, W, GeneratedModel
 
-model = GeneratedBlock(in_channels=CIN)
-x = torch.randn(1, CIN, H, W)
-model.eval()
-with torch.no_grad():
-    y = model(x)
+def get_datasets(root="./data", val_split=0.1):
+    mean_std = { 'CIFAR10': ([0.4914,0.4822,0.4465],[0.247,0.243,0.261]), 'CIFAR100': ([0.507,0.487,0.441],[0.267,0.256,0.276]), 'MNIST': ([0.1307],[0.3081]), 'FashionMNIST': ([0.2860],[0.3530]), 'STL10': ([0.4467,0.4398,0.4066],[0.2603,0.2566,0.2713]) }
+    mean,std = mean_std.get('MNIST', ([0.5]*1, [0.5]*1))
+    tf_train = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
+    tf_test  = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
+    full = torchvision.datasets.MNIST(root=root, train=True, download=True, transform=tf_train)
+    test = torchvision.datasets.MNIST(root=root, train=False, download=True, transform=tf_test)
+    n_val = max(1, int(len(full) * val_split))
+    n_train = len(full) - n_val
+    train, val = random_split(full, [n_train, n_val], generator=torch.Generator().manual_seed(42))
+    return train, val, test
 
-print('Output shape:', tuple(y.shape))
+def get_model(device):
+    model = GeneratedModel(in_channels=CIN)
+    return model.to(device)
+
+def get_loss():
+    return nn.CrossEntropyLoss()
+
+def get_optimizer(model):
+    return optim.AdamW(model.parameters(), lr=0.1, weight_decay=0.0001)
+
+def get_scheduler(opt):
+    return optim.lr_scheduler.CosineAnnealingLR(opt, T_max=10)
+
+def accuracy(logits, targets):
+    if logits.dim()>2: logits = logits.mean(dim=(-1,-2))
+    preds = logits.argmax(dim=1)
+    return (preds==targets).float().mean().item()
+
+def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip=0.0):
+    model.train(); total=0.0
+    for x,y in loader:
+        x=x.to(device); y=y.to(device)
+        optimizer.zero_grad()
+        out = model(x)
+        if out.dim()>2: out = out.mean(dim=(-1,-2))
+        loss = criterion(out, y)
+        loss.backward()
+        if grad_clip>0: nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        optimizer.step()
+        total += loss.item() * x.size(0)
+    return total / len(loader.dataset)
+
+def evaluate(model, loader, criterion, device):
+    model.eval(); total=0.0; accs=0.0
+    with torch.no_grad():
+        for x,y in loader:
+            x=x.to(device); y=y.to(device)
+            out = model(x)
+            if out.dim()>2: out = out.mean(dim=(-1,-2))
+            loss = criterion(out, y)
+            total += loss.item() * x.size(0)
+            accs += accuracy(out, y) * x.size(0)
+    return total/len(loader.dataset), accs/len(loader.dataset)
+
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    train_ds, val_ds, test_ds = get_datasets()
+    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=8, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=8)
+    test_loader = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=8)
+    model = get_model(device)
+    criterion = get_loss()
+    optimizer = get_optimizer(model)
+    scheduler = get_scheduler(optimizer)
+    best=0.0
+    for epoch in range(1, 10+1):
+        tr_loss = train_one_epoch(model, train_loader, criterion, optimizer, device, grad_clip=0)
+        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        try: scheduler.step()
+        except Exception: pass
+        print(f"METRIC: epoch={epoch} train_loss={tr_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
+        if val_acc>best: best=val_acc; print(f"BEST: val_acc={best:.4f}")
+    tl, ta = evaluate(model, test_loader, criterion, device)
+    print(f"TEST: acc={ta:.4f} loss={tl:.4f}")
+
+if __name__ == "__main__":
+    main()
