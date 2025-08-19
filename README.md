@@ -2,10 +2,17 @@
 
 Netkego is a React + Vite app to visually assemble blocks and models, preview shapes/params/FLOPs, pick datasets and hyperparameters, and generate runnable PyTorch code. It includes a tiny runner that executes the generated code in a local virtual environment and streams logs back to the UI.
 
+| Build Blocks |  
+| --- |  
+| <img src="fig/1.png" alt="Build Blocks"/> |  
 
-| Build Blocks | Build Model | Training |
-| --- | --- | --- |
-| <img src="fig/1.png" alt="Build Blocks" width="300"/> | <img src="fig/2.png" alt="Build Model" width="300"/> | <img src="fig/3.png" alt="Training" width="300"/> |
+| Build Model |  
+| --- |  
+| <img src="fig/2.png" alt="Build Model"/> |  
+
+| Training |  
+| --- |  
+| <img src="fig/3.png" alt="Training"/> |  
 
 
 
