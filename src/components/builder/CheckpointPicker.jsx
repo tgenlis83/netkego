@@ -39,13 +39,16 @@ export default function CheckpointPicker({ open, onClose, onPick }){
 
   if(!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-      <div className="bg-white rounded-xl shadow-xl w-[520px] max-w-[95vw] p-4">
-        <div className="text-base font-semibold mb-2">Resume from checkpoint</div>
-        <div className="space-y-3 text-sm">
+    <div className="fixed inset-0 z-50 bg-black/30">
+      <div className="absolute inset-0 bg-white flex flex-col p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-base font-semibold">Resume from checkpoint</div>
+          <Button variant="ghost" onClick={onClose}>Close</Button>
+        </div>
+        <div className="space-y-3 text-sm flex-1 overflow-auto">
           <div>
             <div className="text-xs mb-1">Known checkpoints (parsed)</div>
-            <div className="max-h-[30vh] overflow-auto border rounded-md">
+            <div className="max-h-[60vh] overflow-auto border rounded-md">
               {items.length===0 ? (
                 <div className="p-2 text-xs text-neutral-600">No checkpoints detected yet. You can still enter a path manually.</div>
               ) : (
@@ -83,8 +86,8 @@ export default function CheckpointPicker({ open, onClose, onPick }){
               </SelectContent>
             </Select>
           </div>
-        </div>
-        <div className="mt-3 flex items-center justify-end gap-2">
+  </div>
+  <div className="mt-3 flex items-center justify-end gap-2">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={()=>{ onPick({ path, mode }); onClose(); }}>Resume</Button>
         </div>

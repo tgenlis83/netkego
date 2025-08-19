@@ -73,7 +73,41 @@ function apiPlugin() {
         try {
       ensureLogDir()
       fs.writeFileSync(LOG_PATH, '[server] Starting run...\n')
-
+          const u = new URL(req.url, 'http://local')
+          const device = (u.searchParams.get('device') || 'cpu').toLowerCase()
+          const LAST_DEVICE_PATH = out('.runner/last_device')
+          try {
+            fs.mkdirSync(path.dirname(LAST_DEVICE_PATH), { recursive: true })
+          } catch {}
+          let prevDevice = null
+          try {
+            if (fs.existsSync(LAST_DEVICE_PATH)) {
+              prevDevice = String(fs.readFileSync(LAST_DEVICE_PATH, 'utf8')).trim()
+            }
+          } catch {}
+          if (prevDevice && prevDevice !== device) {
+            // remove the venv to force a clean install for the new device backend
+            const VENV = out('.venv')
+            try {
+              fs.appendFileSync(LOG_PATH, `[server] Device changed ${prevDevice} -> ${device}; removing .venv for fresh install...\n`)
+              fs.rmSync(VENV, { recursive: true, force: true })
+            } catch (e) {
+              fs.appendFileSync(LOG_PATH, `[server] WARN: failed to remove .venv: ${String(e)}\n`)
+            }
+          }
+          try { fs.writeFileSync(LAST_DEVICE_PATH, device, 'utf8') } catch {}
+          // Determine torch install line based on device
+          let torchInstall = ''
+          if (device === 'cuda') {
+            // CUDA wheel via NVIDIA index; version-agnostic latest
+            torchInstall = 'uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cu121 torch torchvision tqdm'
+          } else if (device === 'mps') {
+            // MPS uses default PyPI wheels on macOS; keep generic
+            torchInstall = 'uv pip install --python .venv/bin/python torch torchvision tqdm'
+          } else {
+            // CPU wheels
+            torchInstall = 'uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch torchvision tqdm'
+          }
           const shell = process.env.SHELL || 'bash'
           const cmd = [
             '-lc',
@@ -82,7 +116,7 @@ function apiPlugin() {
               'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"',
               'uv venv --seed .venv',
               '. .venv/bin/activate',
-              'uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu torch torchvision tqdm',
+              `${torchInstall}`,
               'python runner/run.py',
             ].join(' && '),
           ]

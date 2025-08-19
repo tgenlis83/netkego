@@ -14,7 +14,10 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { CodeEditor } from "@/components/ui/code-editor";
-import { X, ArrowUp, ArrowDown, Info, Wrench, Layers as LayersIcon, Blocks, Settings2, Download, Link2, AlertTriangle, CheckCircle, Library, Boxes, Box, PlayCircle, LineChart } from "lucide-react";
+import { X, ArrowUp, ArrowDown, Info, Wrench, Layers as LayersIcon, Blocks, Settings2, Download, Link2, AlertTriangle, CheckCircle, Library, Boxes, Box, PlayCircle, LineChart, HelpCircle } from "lucide-react";
+import { FaApple } from "react-icons/fa";
+import { BsNvidia } from "react-icons/bs";
+import { TbCpu } from "react-icons/tb";
 import { CAT_COLORS, LAYERS, PRESETS, MODEL_PRESETS, SYNERGIES, HP_PRESETS, DATASETS } from "@/lib/constants";
 import { copyText, downloadText } from "@/lib/utils";
 import Palette from "@/components/builder/Palette";
@@ -75,11 +78,15 @@ with torch.no_grad():
 print('Output shape:', tuple(y.shape))`
   );
   const [resumeOpen, setResumeOpen] = useState(false);
+  // Runtime device badge (shown on PyTorch tab when a run starts)
+  const [deviceDetecting, setDeviceDetecting] = useState(false);
+  const [deviceUsed, setDeviceUsed] = useState(null); // e.g., 'cuda' | 'mps' | 'cpu'
+  const [runCounter, setRunCounter] = useState(0);
 
   // Build Block state
   const [H,setH]=useState(56); const [W,setW]=useState(56); const [Cin,setCin]=useState(64);
-  const [inputMode, setInputMode] = useState('custom'); // 'dataset' | 'custom'
-  const [datasetId, setDatasetId] = useState('CIFAR10');
+  const [inputMode, setInputMode] = useState('dataset'); // 'dataset' | 'custom'
+  const [datasetId, setDatasetId] = useState('MNIST');
   const [datasetPct, setDatasetPct] = useState(100); // 1-100% of training set
   const dsInfo = DATASETS.find(d=>d.id===datasetId);
   React.useEffect(()=>{
@@ -104,6 +111,27 @@ print('Output shape:', tuple(y.shape))`
   const [model, setModel] = useState([]);
   const [modelSelIdx, setModelSelIdx] = useState(-1);
   const modelSelected = modelSelIdx>=0 ? model[modelSelIdx] : null;
+  // When editing a block from the Model in the Build Block tab, track its model index
+  const [editingModelBlockIdx, setEditingModelBlockIdx] = useState(null);
+  // Foldable panels in Build Model
+  const [showSaved, setShowSaved] = useState(true);
+  const [showPresetBlocks, setShowPresetBlocks] = useState(true);
+  const [showPresetModels, setShowPresetModels] = useState(true);
+
+  // Live-sync: when editing a model block in the builder, push changes back to the model
+  React.useEffect(()=>{
+    if(editingModelBlockIdx==null) return;
+    setModel(prev=>{
+      const i = editingModelBlockIdx;
+      if(!Array.isArray(prev) || i<0 || i>=prev.length) return prev;
+      const el = prev[i];
+      if(!el || el.type !== 'block') return prev;
+      const steps = block.map(s=>({ id:s.id, cfg:{ ...(s.cfg||{}) } }));
+      const arr=[...prev];
+      arr[i] = { ...el, steps };
+      return arr;
+    });
+  }, [block, editingModelBlockIdx]);
 
   // Derived: run shape/param/flops propagation + dimension checks
   const stats = useMemo(()=>{
@@ -155,6 +183,8 @@ print('Output shape:', tuple(y.shape))`
         info="Concat (channels++)"; outC = c * 2;
       } else if(l.id==="linear"){
         const o=step.cfg?.outF||1000; params += c*o; info=`Linear ${c}→${o}`; outC=o;
+  // Warn if applying Linear while spatial dims > 1 (will be globally pooled at codegen)
+  if(h>1 || w>1){ issues.push({ type:"linear_spatial", step:i, msg:`Linear placed with spatial dims ${h}×${w}; will GAP before flatten in codegen.` }); }
       }
       SYNERGIES.forEach(s=>{ if(s.need.every(t=>[l.id, ...(i>0?[block[i-1].id]:[])].includes(t))) synergiesHit.add(s.tag); });
       steps.push({ i, name:l.name, info, shape:`(${outC}, ${h}, ${w})` });
@@ -213,6 +243,7 @@ print('Output shape:', tuple(y.shape))`
         info="Concat (channels++)"; outC = c * 2;
       } else if(l.id==="linear"){
         const o=step.cfg?.outF||1000; params += c*o; info=`Linear ${c}→${o}`; outC=o;
+  if(h>1 || w>1){ issues.push({ type:"linear_spatial", step:i, msg:`Linear placed with spatial dims ${h}×${w}; will GAP before flatten in codegen.` }); }
       }
       SYNERGIES.forEach(s=>{ if(s.need.every(t=>[l.id, ...(i>0?[stepsArr[i-1].id]:[])].includes(t))) synergiesHit.add(s.tag); });
       steps.push({ i, name:l.name, info, shape:`(${outC}, ${h}, ${w})` });
@@ -225,7 +256,7 @@ print('Output shape:', tuple(y.shape))`
   const importPreset = (p)=>{
     const built = p.composition.map(id=>({ id, cfg: { ...(LAYERS.find(l=>l.id===id)?.defaults||{}) } }));
     const wired = autowireResiduals(built, H, W, Cin);
-    setBlock(wired); setSelectedIdx(-1); setTab("build");
+  setBlock(wired); setSelectedIdx(-1); setTab("build");
   };
 
   // Add preset block into Model
@@ -233,9 +264,10 @@ print('Output shape:', tuple(y.shape))`
     const built = p.composition.map(id=>({ id, cfg: { ...(LAYERS.find(l=>l.id===id)?.defaults||{}) } }));
     const wired = autowireResiduals(built, H, W, Cin);
     setModel(prev=>{
-      const el = { type:'block', name: p.name, steps: wired };
+  const name = nextIndexedBlockName(p.name, prev);
+  const el = { type:'block', name, steps: wired };
       if (modelSelIdx>=0){ const arr=[...prev]; arr.splice(modelSelIdx+1,0, el); return arr; }
-      return [...prev, el];
+  return [...prev, el];
     });
     setTab('model');
   };
@@ -277,7 +309,8 @@ print('Output shape:', tuple(y.shape))`
 
   // Build a full model from a model preset plan
   function buildModelFromPreset(plan){
-    const out = [];
+  const out = [];
+  const countByName = new Map();
     plan.forEach(seg=>{
       if(seg.type==='layer'){
         out.push({ type:'layer', id: seg.id, cfg: { ...(seg.cfg||{}) } });
@@ -285,7 +318,12 @@ print('Output shape:', tuple(y.shape))`
         const repeat = seg.repeat || 1;
         for(let i=0;i<repeat;i++){
           const steps = buildBlockStepsFromPreset(seg.preset, seg.outC, seg.downsample && i===0 ? 2 : 1);
-          out.push({ type:'block', name: PRESETS.find(p=>p.id===seg.preset)?.name || seg.preset, steps });
+      const base = PRESETS.find(p=>p.id===seg.preset)?.name || seg.preset;
+      const idx = (countByName.get(base) || 0) + 1; countByName.set(base, idx);
+      const name = `${base} #${idx}`;
+          out.push({ type:'block', name, steps });
+          // Residual outside the block: add an Add layer that auto-sources from the input to this block
+          out.push({ type:'layer', id:'add', cfg: { autoFromOffset: steps.length } });
         }
       }
     });
@@ -388,7 +426,7 @@ print('Output shape:', tuple(y.shape))`
     return [...prev, el];
   });
   const addSavedBlockToModel = (blk)=> setModel(prev=>{
-    const el = { type:'block', name: blk.name, steps: blk.steps.map(s=>({ id:s.id, cfg:{ ...(s.cfg||{}) } })) };
+  const el = { type:'block', name: nextIndexedBlockName(blk.name, prev), steps: blk.steps.map(s=>({ id:s.id, cfg:{ ...(s.cfg||{}) } })) };
     if (modelSelIdx>=0){ const arr=[...prev]; arr.splice(modelSelIdx+1,0, el); return arr; }
     return [...prev, el];
   });
@@ -402,25 +440,67 @@ print('Output shape:', tuple(y.shape))`
     return arr;
   });
 
+  // New: Edit a model block inside the Build Block tab (live-linked)
+  const editBlockInBuilder = (i)=>{
+    const el = model[i];
+    if(!el || el.type!=='block') return;
+    setBlock(el.steps.map(s=>({ id:s.id, cfg:{ ...(s.cfg||{}) } })));
+    setSelectedIdx(-1);
+    setEditingModelBlockIdx(i);
+    setTab('build');
+  };
+
   // Flatten model into steps and adjust residual 'from' to global indices
   function flattenModelWithFromAdjust(modelEls){
     const out=[]; let base=0;
     for(const el of modelEls){
       if(el.type==='layer'){
         const s = { id: el.id, cfg: { ...(el.cfg||{}) } };
+        // If an absolute reference sneaks onto a layer (unlikely), normalize
+        if(s.id==='add' && typeof s.cfg?.fromGlobal==='number'){
+          s.cfg = { ...s.cfg, from: s.cfg.fromGlobal };
+          delete s.cfg.fromGlobal;
+        } else if(s.id==='add' && s.cfg?.autoFrom==='prev'){
+          // Auto-connect to previous global output (identity path around prior stack)
+          s.cfg = { ...s.cfg, from: Math.max(0, base - 1) };
+          delete s.cfg.autoFrom;
+        } else if(s.id==='add' && typeof s.cfg?.autoFromOffset==='number'){
+          // Connect to the element located `offset` steps before the add, minus one to reach the input of that block
+          const offset = Math.max(0, parseInt(s.cfg.autoFromOffset, 10) || 0);
+          s.cfg = { ...s.cfg, from: Math.max(0, base - offset - 1) };
+          delete s.cfg.autoFromOffset;
+        }
         out.push(s); base += 1;
       } else if(el.type==='block'){
         el.steps.forEach((step)=>{
           const s = { id: step.id, cfg: { ...(step.cfg||{}) } };
-          if(s.id==='add' && typeof s.cfg.from==='number'){
-            s.cfg = { ...s.cfg, from: (base + s.cfg.from) };
+          if(s.id==='add'){
+            if(typeof s.cfg.fromGlobal==='number'){
+              s.cfg = { ...s.cfg, from: s.cfg.fromGlobal };
+              delete s.cfg.fromGlobal;
+            } else if(typeof s.cfg.from==='number'){
+              s.cfg = { ...s.cfg, from: (base + s.cfg.from) };
+            }
           }
           out.push(s);
         });
         base += el.steps.length;
+        // If the very next element is a model-level Add with autoFrom, it will be resolved on its own branch above
       }
     }
     return out;
+  }
+
+  // Utility: generate a unique block name with incremental index if duplicates exist
+  function nextIndexedBlockName(baseName, currentModel){
+    const existing = (currentModel||[]).filter(el=> el.type==='block' && typeof el.name==='string');
+    const same = existing.filter(el=> el.name===baseName || el.name?.startsWith(baseName + ' #'));
+    if(same.length===0) return baseName;
+    const indices = same.map(el=>{
+      const m = String(el.name||'').match(/#(\d+)$/); return m? parseInt(m[1],10) : 0;
+    });
+    const next = Math.max(0, ...indices) + 1;
+    return `${baseName} #${next}`;
   }
 
   // Stats for Model (flattened)
@@ -428,6 +508,21 @@ print('Output shape:', tuple(y.shape))`
     const steps = flattenModelWithFromAdjust(model);
     return simulateStatsForSteps(steps, H, W, Cin);
   }, [model, H, W, Cin]);
+
+  // Flattened steps for quick lookups (labels/graph)
+  const flattenedSteps = useMemo(()=> flattenModelWithFromAdjust(model), [model]);
+
+  // helper: model index for a flattened step index
+  function modelIdxForFlattened(flatIdx){
+    let base=0;
+    for(let i=0;i<model.length;i++){
+      const el=model[i];
+      const span = (el.type==='layer') ? 1 : (el.steps?.length||0);
+      if(flatIdx < base + span) return i;
+      base += span;
+    }
+    return -1;
+  }
 
   // helper: flattened index for a given model index
   const flattenedIndexForModelIdx = (idx)=>{
@@ -439,8 +534,52 @@ print('Output shape:', tuple(y.shape))`
     return base;
   };
 
+  // Build a flattened meta list with block names and layer names
+  const flattenedModelMeta = useMemo(()=>{
+    const meta=[]; let base=0;
+    model.forEach((el, mi)=>{
+      if(el.type==='layer'){
+        const l = LAYERS.find(x=>x.id===el.id);
+        meta.push({ g: base, modelIdx: mi, inBlockIdx: null, blockName: null, layerName: l?.name||el.id, id: el.id });
+        base += 1;
+      } else if(el.type==='block'){
+        el.steps.forEach((s, bi)=>{
+          const l = LAYERS.find(x=>x.id===s.id);
+          meta.push({ g: base+bi, modelIdx: mi, inBlockIdx: bi, blockName: el.name, layerName: l?.name||s.id, id: s.id });
+        });
+        base += el.steps.length;
+      }
+    });
+    return meta;
+  }, [model]);
+
   // Hyperparameters tab
-  const [hp,setHp]=useState({ optimizer:"SGD", lr:0.1, momentum:0.9, weightDecay:1e-4, scheduler:"cosine", warmup:5, epochs:50, labelSmoothing:0.0, mixup:0.0, cutmix:0.0, stochasticDepth:0.0, ema:false, cosineRestarts:false, T0:10, Tmult:2, batchSize:128, numWorkers:2, loss:"CrossEntropy", valSplit:0.1, gradClip:0.0, stepSize:30, gamma:0.1, device:'auto' });
+  const [hp, setHp] = useState({
+    optimizer: "AdamW",
+    lr: 0.01,
+    momentum: 0.9,
+    weightDecay: 1e-4,
+    scheduler: "none",
+    warmup: 0,
+    epochs: 10,
+    labelSmoothing: 0.0,
+    mixup: 0.0,
+    cutmix: 0.0,
+    stochasticDepth: 0.0,
+    ema: false,
+    cosineRestarts: false,
+    T0: 10,
+    Tmult: 2,
+    batchSize: 128,
+    numWorkers: 4,
+    loss: "CrossEntropy",
+    valSplit: 0.1,
+    gradClip: 0.0,
+    stepSize: 30,
+    gamma: 0.1,
+  device: "cpu",
+  precision: "fp32", // fp32 | amp_fp16 | amp_bf16
+  });
   const applyPreset = (p)=>{ setHp(prev=>({ ...prev, ...p.details, cosineRestarts: p.details.scheduler==="cosine_warm_restarts" })); };
 
   const exportJSON = ()=>{
@@ -458,6 +597,35 @@ print('Output shape:', tuple(y.shape))`
       setCode(generateTorchAll(block, model, H, W, Cin));
     }
   }, [tab, block, model, H, W, Cin]);
+
+  // When a run starts, poll output to detect device line "DEVICE: <type>"
+  React.useEffect(()=>{
+    if(!deviceDetecting) return;
+    let alive = true;
+    let tries = 0;
+    const intervalMs = 750;
+    const maxTries = Math.ceil((5 * 60 * 1000) / intervalMs); // 5 minutes
+    const tick = ()=>{
+      fetch('/api/run-output', { cache: 'no-store' })
+        .then(r=>r.text())
+        .then(t=>{
+          if(!alive) return;
+          const s = String(t||'');
+          const m = s.match(/DEVICE:\s*([A-Za-z0-9_\-:]+)/);
+          if(m && m[1]){
+            setDeviceUsed(m[1].toLowerCase());
+            setDeviceDetecting(false);
+          }
+        })
+        .catch(()=>{});
+      tries+=1;
+      // stop trying after ~5 min
+      if(tries>maxTries){ alive=false; setDeviceDetecting(false); }
+    };
+    const id = setInterval(tick, intervalMs);
+    tick();
+    return ()=>{ alive=false; clearInterval(id); };
+  }, [deviceDetecting, runCounter]);
 
   return (
     <div className="w-full h-screen bg-neutral-50 flex flex-col">
@@ -521,7 +689,7 @@ print('Output shape:', tuple(y.shape))`
             </CardContent>
           </Card>
 
-          <Palette addLayer={tab==='model' ? addModelLayer : addLayer} mode={tab==='model' ? 'model' : 'build'} />
+          <Palette addLayer={tab==='model' ? addModelLayer : addLayer} mode={tab==='model' ? 'model' : 'build'} compat={tab==='model' ? null : computeNextCompat(block, stats, { C: Cin, H, W })} />
         </div>
 
         <div className="col-span-9">
@@ -538,6 +706,12 @@ print('Output shape:', tuple(y.shape))`
             <TabsContent value="build">
               <div className="grid grid-cols-5 gap-3">
                 <div className="col-span-3">
+                  {editingModelBlockIdx!=null && model[editingModelBlockIdx]?.type==='block' && (
+                    <div className="mb-2 p-2 rounded-md bg-blue-50 border border-blue-200 text-blue-800 flex items-center justify-between">
+                      <span>Editing model block: <b>{model[editingModelBlockIdx]?.name || 'Block'}</b>. Changes sync automatically.</span>
+                      <Button size="sm" variant="secondary" onClick={()=>setEditingModelBlockIdx(null)}>Done</Button>
+                    </div>
+                  )}
                   <Card>
                     <CardHeader>
                       <CardTitle>Current Block</CardTitle>
@@ -612,7 +786,7 @@ print('Output shape:', tuple(y.shape))`
                     <CardHeader><CardTitle>Inspector & Config</CardTitle></CardHeader>
                     <CardContent className="text-sm space-y-3">
                       {selected ? (
-                        <LayerConfig selected={selected} selectedIdx={selectedIdx} block={block} stats={stats} onChange={(cfg)=>{ setBlock(prev=>{ const arr=[...prev]; arr[selectedIdx]={...arr[selectedIdx], cfg}; return arr; }); }} />
+                        <LayerConfig selected={selected} selectedIdx={selectedIdx} block={block} stats={stats} addContext={{ scope: editingModelBlockIdx!=null ? 'model' : 'block', flattenedMeta: flattenedModelMeta, baseOffset: flattenedIndexForModelIdx(editingModelBlockIdx ?? 0) - selectedIdx }} onChange={(cfg)=>{ setBlock(prev=>{ const arr=[...prev]; arr[selectedIdx]={...arr[selectedIdx], cfg}; return arr; }); }} />
                       ) : (
                         <div className="text-neutral-600">Select a step (wrench) to edit its parameters.</div>
                       )}
@@ -658,13 +832,24 @@ print('Output shape:', tuple(y.shape))`
                       <div className="border border-dashed border-neutral-300 rounded-xl p-2 bg-white/60 text-xs text-neutral-700">Input • ({Cin}, {H}, {W}) — mandatory</div>
                       {model.length===0 && <div className="text-neutral-600 text-sm">Add saved blocks, presets, or layers from the right panel.</div>}
                       {model.map((el,i)=>{
+                        const baseIdx = flattenedIndexForModelIdx(i);
+                        const labelFor = (g)=>{
+                          const m = flattenedModelMeta.find(mm=>mm.g===g);
+                          if(!m) return `#${g}`;
+                          return `#${g} ${m.blockName ? '['+m.blockName+'] ' : ''}${m.layerName}`;
+                        };
                         if(el.type==='layer'){
                           const l=LAYERS.find(x=>x.id===el.id);
+                          const extraDesc = (l.id==='add') ? (()=>{
+                            const step = flattenedSteps[baseIdx];
+                            const from = step && typeof step.cfg?.from==='number' ? step.cfg.from : null;
+                            return (from!=null) ? `Residual Add ← ${labelFor(from)}` : 'Residual Add (select source)';
+                          })() : null;
                           return (
                             <div key={`L${i}`} className={`border border-neutral-200 rounded-xl p-2 bg-white/90 backdrop-blur-sm flex items-center justify-between shadow-sm hover:shadow-md transition ${CAT_COLORS[l.category]?.ring||''}`}>
                               <div>
                                 <div className="text-sm font-medium flex items-center gap-2">{l.name}<ColorChip category={l.category}/></div>
-                                <div className="text-xs text-neutral-600">{renderStepSummary(l, el)}</div>
+                                <div className="text-xs text-neutral-600">{extraDesc ?? renderStepSummary(l, el)}</div>
                               </div>
                               <div className="flex items-center gap-1">
                                 <Button size="icon" variant="ghost" onClick={()=>moveModelIdx(i,-1)}><ArrowUp className="w-4 h-4"/></Button>
@@ -676,7 +861,7 @@ print('Output shape:', tuple(y.shape))`
                           );
                         }
                         // block element
-                        return (
+        return (
                           <div key={`B${i}`} className={`border border-neutral-200 rounded-xl p-2 bg-white/90 backdrop-blur-sm flex items-center justify-between shadow-sm hover:shadow-md transition`}>
                             <div className="min-w-0">
                               <div className="text-sm font-medium flex items-center gap-2"><Box className="w-4 h-4"/>{el.name}<span className="px-2 py-0.5 rounded-md text-[11px] bg-neutral-200 text-neutral-800">Block</span></div>
@@ -687,7 +872,7 @@ print('Output shape:', tuple(y.shape))`
                               </div>
                             </div>
                             <div className="flex items-center gap-1">
-                              <Button size="sm" variant="outline" onClick={()=>expandBlockAt(i)} title="Expand this block into its layers so you can edit or insert between">Expand</Button>
+          <Button size="sm" variant="outline" onClick={()=>editBlockInBuilder(i)} title="Edit this block in the Build Blocks tab and auto-apply changes to the model">Edit in Blocks</Button>
                               <Button size="icon" variant="ghost" onClick={()=>{ setModelSelIdx(i); }}><Wrench className="w-4 h-4"/></Button>
                               <Button size="icon" variant="ghost" onClick={()=>moveModelIdx(i,-1)}><ArrowUp className="w-4 h-4"/></Button>
                               <Button size="icon" variant="ghost" onClick={()=>moveModelIdx(i,1)}><ArrowDown className="w-4 h-4"/></Button>
@@ -698,17 +883,46 @@ print('Output shape:', tuple(y.shape))`
                       })}
                     </CardContent>
                   </Card>
-
                   <Card className="mt-3">
                     <CardHeader><CardTitle>Rough Totals</CardTitle></CardHeader>
                     <CardContent className="text-xs space-y-1">
                       <div>Output shape: ({modelStats.outC}, {modelStats.H}, {modelStats.W})</div>
                       <div>Params: {(modelStats.params/1e6).toFixed(3)} M (rough)</div>
                       <div>FLOPs: {(modelStats.flops/1e9).toFixed(3)} GFLOPs @ {H}×{W}</div>
-                      <div>Est. memory (batch {hp.batchSize}): {formatMem(estimateMemoryMB(modelStats, hp.batchSize))}</div>
+                      <div>Est. memory (batch {hp.batchSize}): {formatMem(estimateMemoryMB(
+                        modelStats,
+                        hp.batchSize,
+                        hp.precision,
+                        hp.optimizer,
+                        { Cin, H, W, datasetId, datasetPct, valSplit: hp.valSplit, numWorkers: hp.numWorkers, ema: hp.ema, inputMode }
+                      ))}</div>
                       <div>Issues: {modelStats.issues.length===0 ? <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle className="w-3.5 h-3.5"/>None</span> : <span className="inline-flex items-center gap-1 text-rose-700"><AlertTriangle className="w-3.5 h-3.5"/>{modelStats.issues.length}</span>}</div>
                     </CardContent>
                   </Card>
+
+                  <Card className="mt-3">
+                    <CardHeader><CardTitle>Model Dimension Checker</CardTitle></CardHeader>
+                    <CardContent className="space-y-2 text-xs">
+                      {modelStats.issues.length===0 && (
+                        <div className="text-emerald-700 flex items-center gap-1"><CheckCircle className="w-3.5 h-3.5"/>No dimensional conflicts detected.</div>
+                      )}
+                      {modelStats.issues.map((it, idx)=> (
+                        <div key={idx} className="border border-neutral-200 rounded-md p-2 bg-white/90 backdrop-blur-sm shadow-sm">
+                          <div className="font-medium flex items-center gap-2">
+                            {(it.type==="add_mismatch" || it.type==="add_invalid_from") ? <AlertTriangle className="w-3.5 h-3.5 text-rose-700"/> : null}
+                            Step #{it.step}: {it.msg}
+                          </div>
+                          {it.type==="add_mismatch" && it.ref && (
+                            <div className="mt-1 text-[11px] text-neutral-700">Suggestion: insert a <b>1×1 Conv</b> (projection) or adjust <b>stride</b>/padding so both paths yield the same (C,H,W).</div>
+                          )}
+                          {it.type==="linear_spatial" && (
+                            <div className="mt-1 text-[11px] text-neutral-700">Tip: add a <b>Global Avg Pool</b> before Linear, or rely on generator safety (auto-GAP) now enabled.</div>
+                          )}
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+
                 </div>
 
                 <div className="col-span-2">
@@ -717,8 +931,8 @@ print('Output shape:', tuple(y.shape))`
                     <CardContent className="space-y-3 text-sm">
                       <div className="text-xs text-neutral-600">Add blocks or layers. Input is implicit from the left settings.</div>
                       <div className="border rounded-xl p-2">
-                        <div className="font-medium text-sm mb-1 flex items-center gap-2"><Library className="w-4 h-4"/>Saved Blocks</div>
-                        {savedBlocks.length===0 ? (
+                        <div className="font-medium text-sm mb-1 flex items-center gap-2"><Library className="w-4 h-4"/>Saved Blocks<Button size="sm" variant="ghost" className="ml-auto" onClick={()=>setShowSaved(v=>!v)}>{showSaved? 'Hide':'Show'}</Button></div>
+                        {!showSaved ? null : savedBlocks.length===0 ? (
                           <div className="text-xs text-neutral-600">Save blocks from the Build Block tab to appear here.</div>
                         ) : (
                           <div className="space-y-2 max-h-[24vh] overflow-auto pr-1">
@@ -736,25 +950,27 @@ print('Output shape:', tuple(y.shape))`
                       </div>
 
                       <div className="border rounded-xl p-2">
-                        <div className="font-medium text-sm mb-1 flex items-center gap-2"><Blocks className="w-4 h-4"/>Preset Blocks</div>
-                        <div className="space-y-2 max-h-[24vh] overflow-auto pr-1">
-                          {PRESETS.map(p=> (
-                            <div key={p.id} className="border border-neutral-200 rounded-md p-2 bg-white/90">
-                              <div className="flex items-start justify-between gap-2">
-                                <div>
-                                  <div className="text-sm font-medium">{p.name}</div>
-                                  <div className="text-[11px] text-neutral-600">{p.family}</div>
+                        <div className="font-medium text-sm mb-1 flex items-center gap-2"><Blocks className="w-4 h-4"/>Preset Blocks<Button size="sm" variant="ghost" className="ml-auto" onClick={()=>setShowPresetBlocks(v=>!v)}>{showPresetBlocks? 'Hide':'Show'}</Button></div>
+                        {!showPresetBlocks ? null : (
+                          <div className="space-y-2 max-h-[24vh] overflow-auto pr-1">
+                            {PRESETS.map(p=> (
+                              <div key={p.id} className="border border-neutral-200 rounded-md p-2 bg-white/90">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <div className="text-sm font-medium">{p.name}</div>
+                                    <div className="text-[11px] text-neutral-600">{p.family}</div>
+                                  </div>
+                                  <Button size="sm" variant="outline" onClick={()=>addPresetToModel(p)}>Add</Button>
                                 </div>
-                                <Button size="sm" variant="outline" onClick={()=>addPresetToModel(p)}>Add</Button>
+                                <div className="mt-2 flex flex-wrap gap-1.5 items-center">
+                                  {p.composition.map((id, idx)=> (
+                                    <LayerToken key={idx} id={id} size="md" />
+                                  ))}
+                                </div>
                               </div>
-                              <div className="mt-2 flex flex-wrap gap-1.5 items-center">
-                                {p.composition.map((id, idx)=> (
-                                  <LayerToken key={idx} id={id} size="md" />
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
 
                       {/* Palette removed here; use the left-side palette instead */}
@@ -767,22 +983,65 @@ print('Output shape:', tuple(y.shape))`
                       </div>
 
                       <div className="border rounded-xl p-2">
-                        <div className="font-medium text-sm mb-1 flex items-center gap-2"><Boxes className="w-4 h-4"/>Preset Models</div>
-                        <div className="space-y-2 max-h-[24vh] overflow-auto pr-1">
-                          {MODEL_PRESETS.map(mp=> (
-                            <div key={mp.id} className="border border-neutral-200 rounded-md p-2 bg-white/90 flex items-center justify-between">
-                              <div>
-                                <div className="text-sm font-medium">{mp.name}</div>
-                                <div className="text-[11px] text-neutral-600 truncate">{mp.family} — {mp.description}</div>
+                        <div className="font-medium text-sm mb-1 flex items-center gap-2"><Boxes className="w-4 h-4"/>Preset Models<Button size="sm" variant="ghost" className="ml-auto" onClick={()=>setShowPresetModels(v=>!v)}>{showPresetModels? 'Hide':'Show'}</Button></div>
+                        {!showPresetModels ? null : (
+                          <div className="space-y-2 max-h-[24vh] overflow-auto pr-1">
+                            {MODEL_PRESETS.map(mp=> (
+                              <div key={mp.id} className="border border-neutral-200 rounded-md p-2 bg-white/90 flex items-center justify-between">
+                                <div>
+                                  <div className="text-sm font-medium">{mp.name}</div>
+                                  <div className="text-[11px] text-neutral-600 truncate">{mp.family} — {mp.description}</div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Button size="sm" variant="secondary" onClick={()=>useModelPreset(mp)}>Use</Button>
+                                  <Button size="sm" variant="outline" onClick={()=>appendModelPreset(mp)}>Append</Button>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <Button size="sm" variant="secondary" onClick={()=>useModelPreset(mp)}>Use</Button>
-                                <Button size="sm" variant="outline" onClick={()=>appendModelPreset(mp)}>Append</Button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
+
+                      {/* Graph view */}
+                      <Card className="mt-3">
+                        <CardHeader><CardTitle>Model Graph</CardTitle></CardHeader>
+                        <CardContent>
+                          {(() => {
+                            const N = model.length;
+                            const rowH = 48; const width = 420; const height = Math.max(60, N*rowH + 20);
+                            const nodes = model.map((el, i)=>({ i, y: 20 + i*rowH + 12, label: el.type==='block'? el.name : (LAYERS.find(l=>l.id===el.id)?.name || el.id), type: el.type }));
+                            const adds = flattenedSteps.map((s, g)=>({s,g})).filter(o=> o.s.id==='add' && typeof o.s.cfg?.from==='number');
+                            const edges = adds.map(({s,g})=> ({ from: modelIdxForFlattened(s.cfg.from), to: modelIdxForFlattened(g) })).filter(e=> e.from>=0 && e.to>=0);
+                            return (
+                              <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} className="bg-white/70 rounded-md border">
+                                <defs>
+                                  <marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto" markerUnits="strokeWidth">
+                                    <path d="M0,0 L0,6 L6,3 z" fill="#64748b" />
+                                  </marker>
+                                </defs>
+                                {nodes.slice(0,-1).map((n,i)=> (
+                                  <line key={`seq-${i}`} x1={80} y1={n.y} x2={80} y2={nodes[i+1].y} stroke="#cbd5e1" strokeWidth="2" />
+                                ))}
+                                {nodes.map(n=> (
+                                  <g key={`n-${n.i}`}>
+                                    <circle cx={80} cy={n.y} r={8} fill={n.type==='block'? '#2563eb':'#10b981'} />
+                                    <text x={96} y={n.y+4} fontSize="12" fill="#334155">{n.label}</text>
+                                  </g>
+                                ))}
+                                {edges.map((e,idx)=>{
+                                  const aY = nodes[e.from]?.y; const bY = nodes[e.to]?.y;
+                                  if(aY==null || bY==null) return null;
+                                  const x1 = 80, y1 = aY, x2 = 80, y2 = bY;
+                                  const dx = 120 + (idx%3)*20;
+                                  const path = `M ${x1} ${y1} C ${x1+dx} ${y1}, ${x2+dx} ${y2}, ${x2} ${y2}`;
+                                  return <path key={`res-${idx}`} d={path} fill="none" stroke="#64748b" strokeWidth="2" markerEnd="url(#arrow)"/>;
+                                })}
+                              </svg>
+                            );
+                          })()}
+                          <div className="text-[11px] text-neutral-600 mt-1">Blocks are blue nodes; layers are green nodes. Curved lines show residual adds (source → add location).</div>
+                        </CardContent>
+                      </Card>
                     </CardContent>
                   </Card>
 
@@ -791,16 +1050,16 @@ print('Output shape:', tuple(y.shape))`
                     <CardContent className="text-sm">
                       {modelSelected ? (
                         modelSelected.type==='layer' ? (
-                          <LayerConfig selected={modelSelected} selectedIdx={flattenedIndexForModelIdx(modelSelIdx)} block={flattenModelWithFromAdjust(model).map(s=>s)} stats={modelStats} onChange={(cfg)=>{ setModel(prev=>{ const arr=[...prev]; arr[modelSelIdx]={...arr[modelSelIdx], cfg}; return arr; }); }} />
+                          <LayerConfig selected={modelSelected} selectedIdx={flattenedIndexForModelIdx(modelSelIdx)} block={flattenModelWithFromAdjust(model).map(s=>s)} stats={modelStats} addContext={{ scope: 'model', flattenedMeta: flattenedModelMeta, baseOffset: 0 }} onChange={(cfg)=>{ setModel(prev=>{ const arr=[...prev]; arr[modelSelIdx]={...arr[modelSelIdx], cfg}; return arr; }); }} />
                         ) : (
                           <div className="text-xs text-neutral-700">
                             <div className="font-medium mb-1">Block: {modelSelected.name}</div>
                             <div>Steps: {modelSelected.steps.map(s=>LAYERS.find(x=>x.id===s.id)?.name||s.id).join(' → ')}</div>
-                            <div className="mt-2">Blocks are treated as black boxes. Use "Expand" in the list to edit layers inline.</div>
+                            <div className="mt-2">Blocks are edited in the Build Blocks tab. Use "Edit in Blocks" in the list to open and live-edit this block.</div>
                           </div>
                         )
                       ) : (
-                        <div className="text-neutral-600 text-sm">Select a layer to edit, or expand a block to edit its layers inline.</div>
+                        <div className="text-neutral-600 text-sm">Select a layer to edit, or use "Edit in Blocks" on a block to edit its layers.</div>
                       )}
                     </CardContent>
                   </Card>
@@ -830,7 +1089,18 @@ print('Output shape:', tuple(y.shape))`
                         <Input type="number" value={hp.lr} onChange={(e)=>setHp({...hp, lr:parseFloat(e.target.value||"0")})}/>
                       </div>
                       <div>
-                        <div className="text-xs">Batch size</div>
+                        <div className="text-xs flex items-center justify-between">
+                          <span>Batch size</span>
+                          <span className="text-[11px] text-neutral-600">
+                            ~{formatMem(estimateMemoryMB(
+                              modelStats,
+                              Math.max(1, hp.batchSize),
+                              hp.precision,
+                              hp.optimizer,
+                              { Cin, H, W, datasetId, datasetPct, valSplit: hp.valSplit, numWorkers: hp.numWorkers, ema: hp.ema, inputMode }
+                            ))}
+                          </span>
+                        </div>
                         <Input type="number" value={hp.batchSize} onChange={(e)=>setHp({...hp, batchSize:parseInt(e.target.value||"128",10)})}/>
                       </div>
                       <div>
@@ -877,12 +1147,25 @@ print('Output shape:', tuple(y.shape))`
                         <Select value={hp.device} onValueChange={(v)=>setHp({...hp, device:v})}>
                           <SelectTrigger className="w-full"><SelectValue/></SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="auto">Auto (CUDA▶MPS▶CPU)</SelectItem>
-                            <SelectItem value="cuda">CUDA</SelectItem>
-                            <SelectItem value="mps">MPS</SelectItem>
+                            <SelectItem value="cuda">CUDA (NVIDIA GPU)</SelectItem>
+                            <SelectItem value="mps">MPS (Apple Silicon)</SelectItem>
                             <SelectItem value="cpu">CPU</SelectItem>
                           </SelectContent>
                         </Select>
+                      </div>
+                      <div>
+                        <div className="text-xs">Precision</div>
+                        <Select value={hp.precision} onValueChange={(v)=>setHp({...hp, precision:v})}>
+                          <SelectTrigger className="w-full"><SelectValue/></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="fp32">FP32 (baseline)</SelectItem>
+                            <SelectItem value="amp_fp16" disabled={hp.device==='cpu'}>AMP FP16 ~1.3–2.0× (CUDA/MPS)</SelectItem>
+                            <SelectItem value="amp_bf16" disabled={!(hp.device==='cpu' || hp.device==='cuda')}>AMP BF16 ~1.1–1.6× (CPU/CUDA)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <div className="text-[11px] text-neutral-600 mt-1">
+                          {hp.precision==='fp32' ? 'Highest precision' : hp.precision==='amp_fp16' ? 'Typically 1.3–2.0× faster with ~½ memory (CUDA/MPS)' : 'Often 1.1–1.6× faster with ~½ memory (CPU/CUDA)'}
+                        </div>
                       </div>
                       {hp.scheduler==="cosine_warm_restarts" && (
                         <>
@@ -1038,15 +1321,47 @@ print('Output shape:', tuple(y.shape))`
               <div className="grid grid-cols-5 gap-3">
                 <div className="col-span-3">
                   <Card>
-          <CardHeader><CardTitle>GeneratedBlock (auto-generated)</CardTitle></CardHeader>
+                    <CardHeader><CardTitle>GeneratedBlock (auto-generated)</CardTitle></CardHeader>
                     <CardContent>
                       <div className="flex items-center gap-2 mb-2">
                         <Button variant="secondary" onClick={()=>copyText(code)}>Copy</Button>
                         <Button variant="outline" onClick={()=>downloadText('generated_block.py', code)}>Download .py</Button>
-                        <Button onClick={()=>saveGenerated(code)} variant="default">Save to runner/generated_block.py</Button>
-            <Button variant="secondary" onClick={()=>runPython(code, mainCode)} title="Runs in a uv-managed venv on CPU"><PlayCircle className="w-4 h-4 mr-1"/>Run</Button>
+                        <Button onClick={()=>saveGenerated(code)} variant="outline">Save to runner/generated_block.py</Button>
+                      </div>
+                      <div className="flex items-center gap-2 mb-2 border-t pt-2">
+                        <Button
+                          variant="default"
+                          className="!bg-emerald-600 hover:!bg-emerald-700 !text-white inline-flex items-center gap-2 whitespace-nowrap"
+                          onClick={()=>{ setDeviceUsed(null); setDeviceDetecting(true); setRunCounter(c=>c+1); runPython(code, mainCode, hp.device); }}
+                          title="Run Python training/eval"
+                        >
+                          <PlayCircle className="w-4 h-5"/>
+                          <span className="leading-none">Run</span>
+                        </Button>
                         <Button variant="destructive" onClick={()=>requestStop()} title="Signal the running training to stop early">Stop</Button>
                         <Button variant="outline" onClick={()=>setResumeOpen(true)} title="Resume from a checkpoint">Resume…</Button>
+                        {deviceDetecting && (
+                          <Badge className="ml-1" variant="secondary"><HelpCircle className="w-3.5 h-3.5 mr-1"/>Device: resolving…</Badge>
+                        )}
+                        {!deviceDetecting && deviceUsed && (
+                            <Badge
+                              className={`ml-1 ${
+                                deviceUsed === "cpu"
+                                  ? "bg-neutral-400 text-white"
+                                  : deviceUsed === "cuda"
+                                  ? "bg-lime-600 text-white"
+                                  : deviceUsed === "mps"
+                                  ? "bg-blue-600 text-white"
+                                  : ""
+                              }`}
+                              variant="outline"
+                            >
+                              {deviceUsed==="cpu" && <TbCpu className="w-3.5 h-3.5 mr-1"/>}
+                              {deviceUsed==="cuda" && <BsNvidia className="w-3.5 h-3.5 mr-1"/>}
+                              {deviceUsed==="mps" && <FaApple className="w-3.5 h-3.5 mr-1"/>}
+                              Device ({deviceUsed})
+                            </Badge>
+                          )}
                       </div>
                       <CheckpointPicker open={resumeOpen} onClose={()=>setResumeOpen(false)} onPick={({path, mode})=> requestResume(path, mode)} />
                       <CodeEditor language="python" value={code} onChange={setCode} className="h-[30vh]"/>
@@ -1060,8 +1375,14 @@ print('Output shape:', tuple(y.shape))`
                       <div className="flex items-center gap-2 mb-2">
                         <Button variant="secondary" onClick={()=>copyText(mainCode)}>Copy</Button>
                         <Button variant="outline" onClick={()=>downloadText('main.py', mainCode)}>Download main.py</Button>
-                        <Button onClick={()=>saveMain(mainCode)} variant="default">Save to .runner/main.py</Button>
-                        <Button variant="secondary" onClick={()=> setMainCode(generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datasetId, datasetPct })) } title={inputMode==='dataset'? 'Generate training code for dataset' : 'Custom mode uses random tensors; training disabled'} disabled={inputMode!=='dataset'}>
+                        <Button onClick={()=>saveMain(mainCode)} variant="outline">Save to .runner/main.py</Button>
+                        <Button
+                          variant="default"
+                          className="!bg-blue-600 hover:!bg-blue-700 !text-white"
+                          onClick={()=> setMainCode(generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datasetId, datasetPct })) }
+                          title={inputMode==='dataset'? 'Generate training code for dataset' : 'Custom mode uses random tensors; training disabled'}
+                          disabled={inputMode!=='dataset'}
+                        >
                           Generate Training Script
                         </Button>
                       </div>
@@ -1115,7 +1436,7 @@ function saveMain(text){
 }
 
 // kick off a background run via npm scripts (requires terminal)
-async function runPython(text, main){
+async function runPython(text, main, device){
   try {
     if (typeof text === 'string' && text.length > 0) {
       await saveGenerated(text)
@@ -1124,7 +1445,8 @@ async function runPython(text, main){
       await saveMain(main)
     }
   } catch {}
-  fetch('/api/run-python', { method: 'POST' }).catch(()=>{})
+  const params = device ? `?device=${encodeURIComponent(device)}` : ''
+  fetch(`/api/run-python${params}`, { method: 'POST' }).catch(()=>{})
 }
 
 // Request the Python loop to stop by creating a STOP flag file on the backend
@@ -1166,7 +1488,7 @@ function requestResume(path, mode){
 // BlockLayersPreview moved to components
 
 // ---------------- Layer Config ----------------
-function LayerConfig({ selected, onChange, selectedIdx, block, stats }){
+function LayerConfig({ selected, onChange, selectedIdx, block, stats, addContext }){
   const l = LAYERS.find(x=>x.id===selected.id);
   const cfg = { ...(l.defaults||{}), ...(selected.cfg||{}) };
   const inS = stats?.inShapes?.[selectedIdx];
@@ -1217,19 +1539,47 @@ function LayerConfig({ selected, onChange, selectedIdx, block, stats }){
           <div><div className="text-xs">Out features</div><Input type="number" value={cfg.outF||1000} onChange={e=>set('outF',parseInt(e.target.value||"1000",10))}/></div>
         </div>
       )}
+      {(l.id==="dropout" || l.id==="droppath") && (
+        <div className="grid grid-cols-2 gap-2">
+          <div><div className="text-xs">Drop prob p</div><Input type="number" step="0.01" min="0" max="1" value={cfg.p ?? (l.id==='dropout'?0.5:0.1)} onChange={e=>set('p', Math.max(0, Math.min(1, parseFloat(e.target.value||"0"))))}/></div>
+          <div className="text-[11px] text-neutral-600 col-span-2">
+            {l.id==='droppath' ? 'Stochastic Depth randomly drops the residual branch with probability p (train only).' : 'Dropout zeros features with probability p (train only).'}
+          </div>
+        </div>
+      )}
       {l.id==="add" && (
         <div className="grid grid-cols-1 gap-2">
           <div>
             <div className="text-xs">Skip from step</div>
-            <Select value={cfg.from!==null && cfg.from!==undefined ? String(cfg.from) : ""} onValueChange={(v)=>set('from', parseInt(v,10))}>
-              <SelectTrigger className="w-full"><SelectValue placeholder={selectedIdx>0?"Choose a previous step":"No previous steps"}/></SelectTrigger>
-              <SelectContent>
-                {block.map((b,idx)=> idx<selectedIdx ? (
-                  <SelectItem key={idx} value={String(idx)}>#{idx} {LAYERS.find(t=>t.id===b.id)?.name || b.id}</SelectItem>
-                ) : null)}
-              </SelectContent>
-            </Select>
-            <div className="text-[11px] text-neutral-600 mt-1">Tip: choose the layer at the start of your block (e.g., before Conv/BN stack) for identity addition. Mismatched shapes will be flagged below.</div>
+            {addContext?.scope === 'model' ? (
+              <Select
+                value={(cfg.fromGlobal!=null) ? String(cfg.fromGlobal) : (cfg.from!=null ? String(cfg.from) : "")}
+                onValueChange={(v)=>{
+                  const g = parseInt(v,10);
+                  // Store absolute index when editing at model scope; also keep relative 'from' for display safety
+                  set('fromGlobal', g);
+                }}
+              >
+                <SelectTrigger className="w-full"><SelectValue placeholder={"Choose a previous layer from the model"}/></SelectTrigger>
+                <SelectContent>
+                  {addContext?.flattenedMeta?.filter(m=> m.g < (addContext.baseOffset + selectedIdx)).map(m=> (
+                    <SelectItem key={m.g} value={String(m.g)}>
+                      #{m.g} {m.blockName ? `[${m.blockName}] `: ''}{m.layerName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Select value={cfg.from!==null && cfg.from!==undefined ? String(cfg.from) : ""} onValueChange={(v)=>set('from', parseInt(v,10))}>
+                <SelectTrigger className="w-full"><SelectValue placeholder={selectedIdx>0?"Choose a previous step":"No previous steps"}/></SelectTrigger>
+                <SelectContent>
+                  {block.map((b,idx)=> idx<selectedIdx ? (
+                    <SelectItem key={idx} value={String(idx)}>#{idx} {LAYERS.find(t=>t.id===b.id)?.name || b.id}</SelectItem>
+                  ) : null)}
+                </SelectContent>
+              </Select>
+            )}
+            <div className="text-[11px] text-neutral-600 mt-1">Tip: residual requires matching (C,H,W). Choose a source before size-changing ops to form an identity path.</div>
           </div>
         </div>
       )}
@@ -1245,8 +1595,65 @@ function renderStepSummary(l, s){
   if(l.id==="maxpool"||l.id==="avgpool") return `${l.name} k${s.cfg.k||2} s${s.cfg.s||2}`;
   if(l.id==="se") return `SE r=${s.cfg.r||16}`;
   if(l.id==="linear") return `Linear → ${s.cfg.outF||'?'}`;
+  if(l.id==="droppath") return `Stochastic Depth p=${s.cfg.p ?? 0.1}`;
   if(l.id==="add") return `Residual Add${typeof s.cfg?.from==='number' ? ` ← #${s.cfg.from}` : ''}`;
   return l.role;
+}
+
+// ---------- Compatibility engine ("pins") ----------
+// Returns a map id -> { status: 'ok'|'warn'|'bad', label, reason?, synergy? }
+function computeNextCompat(block, stats, baseDims){
+  const out = {};
+  const last = block[block.length-1] || null;
+  const lastShape = stats?.outShapes?.[block.length-1] || (block.length===0 ? (baseDims||null) : null);
+  const C = lastShape?.C, H = lastShape?.H, W = lastShape?.W;
+  LAYERS.forEach(l=>{
+    let status = 'ok'; let label = 'Fits'; let reason = '';
+    // Basic shape requirements
+    const needHW = ['conv','pwconv','dwconv','grpconv','dilconv','bn','gn','ln','relu','gelu','silu','hswish','prelu','maxpool','avgpool','gap','se','eca','cbam','mhsa','winattn','droppath','dropout','add','concat'];
+    if(needHW.includes(l.id) && (H==null || W==null || C==null)){
+      status='bad'; label='No tensor'; reason='Requires feature map input';
+    }
+    // Depthwise requires channels>0
+    if(l.id==='dwconv' && (!Number.isFinite(C) || C<=0)){
+      status='bad'; label='Missing channels';
+    }
+    // GroupNorm requires C%groups==0; we don't know groups until config, so warn if C not divisible by common groups
+    if(l.id==='gn'){
+      const commons = [32,16,8,4];
+      const okAny = commons.some(g=> Number.isFinite(C) && C>0 && (C % g === 0));
+      if(!okAny){ status='warn'; label='Pick groups'; reason='Set groups dividing C'; }
+    }
+    // Residual add needs a previous save with same shape; we check if any previous out shape matches current
+    if(l.id==='add'){
+      const before = stats?.outShapes||[];
+      const matchIdx = [...before.slice(0, Math.max(0, (block.length)))].findIndex(s=> s && C!=null && H!=null && W!=null && s.C===C && s.H===H && s.W===W);
+      if(matchIdx<0){ status='warn'; label='Needs match'; reason='Insert 1×1 or adjust stride to match shapes'; }
+    }
+    // Concat wants same H,W; warn if last op changed HW relative to its source (unknown source → warn generically)
+    if(l.id==='concat'){
+      status='warn'; label='Needs same H,W'; reason='Concatenate requires matching spatial dims';
+    }
+    // Linear prefers flattened features, warn if H,W > 1
+    if(l.id==='linear' && Number.isFinite(H) && Number.isFinite(W) && (H>1 || W>1)){
+      status='warn'; label='Flattens'; reason='Will flatten C×H×W to features';
+    }
+    // Stochastic depth only meaningful if there is or will be an Add
+    if(l.id==='droppath'){
+      const hasAddAhead = block.some(s=>s.id==='add');
+      if(!hasAddAhead){ status='warn'; label='Residual only'; reason='Best used inside residual blocks'; }
+    }
+    // Synergy hint: simple last+candidate pairs
+    let synergy = null;
+    if(last){
+      if((last.id==='conv'||last.id==='dwconv'||last.id==='grpconv'||last.id==='dilconv') && l.id==='bn') synergy = 'Conv → BN';
+      else if(last.id==='bn' && ['relu','gelu','silu','hswish'].includes(l.id)) synergy = 'BN → Activation';
+      else if(last.id==='dwconv' && l.id==='pwconv') synergy = 'DW → PW (separable)';
+      else if(l.id==='se') synergy = 'SE improves channels';
+    }
+    out[l.id] = { status, label, reason, synergy };
+  });
+  return out;
 }
 
 // ---------- Utilities: copy/download ----------
@@ -1273,6 +1680,8 @@ function generateTorchAll(block, modelEls, H, W, Cin){
   emit('');
   const modelStepsForSe = flattenModelFromCode(modelEls);
   const needsSE = has('se') || modelStepsForSe.some(s=>s.id==='se');
+  const needsDropPath = has('droppath') || modelStepsForSe.some(s=>s.id==='droppath');
+  const needsLN2d = has('ln') || modelStepsForSe.some(s=>s.id==='ln');
   if (needsSE){
     emit('class SqueezeExcite(nn.Module):');
     emit('    def __init__(self, c, r=16):');
@@ -1290,6 +1699,39 @@ function generateTorchAll(block, modelEls, H, W, Cin){
     emit('        s = self.fc2(s)');
     emit('        s = self.gate(s)');
     emit('        return x * s');
+    emit('');
+  }
+
+  if (needsDropPath){
+    emit('class DropPath(nn.Module):');
+    emit('    def __init__(self, p: float = 0.0):');
+    emit('        super().__init__()');
+    emit('        self.p = float(max(0.0, min(1.0, p)))');
+    emit('');
+    emit('    def forward(self, x):');
+    emit('        if not self.training or self.p <= 0.0:');
+    emit('            return x');
+    emit('        keep = 1.0 - self.p');
+    emit('        if keep <= 0.0:');
+    emit('            return torch.zeros_like(x)');
+    emit('        shape = (x.shape[0],) + (1,) * (x.dim() - 1)');
+    emit('        noise = x.new_empty(shape).bernoulli_(keep) / keep');
+    emit('        return x * noise');
+    emit('');
+  }
+
+  if (needsLN2d){
+    emit('class LayerNorm2d(nn.Module):');
+    emit('    def __init__(self, c, eps=1e-6):');
+    emit('        super().__init__()');
+    emit('        self.ln = nn.LayerNorm(c, eps=eps)');
+    emit('');
+    emit('    def forward(self, x):');
+    emit('        # apply LayerNorm over channels in channels-last order');
+    emit('        x = x.permute(0, 2, 3, 1)');
+    emit('        x = self.ln(x)');
+    emit('        x = x.permute(0, 3, 1, 2)');
+    emit('        return x');
     emit('');
   }
 
@@ -1318,7 +1760,7 @@ function generateTorchAll(block, modelEls, H, W, Cin){
       const groups = cfg.groups || 32;
       emit(`        self.${name} = nn.GroupNorm(num_groups=${groups}, num_channels=${c})`);
     } else if(s.id==='ln'){
-      emit(`        self.${name} = nn.LayerNorm(${c})  # NOTE: verify normalized shape`);
+      emit(`        self.${name} = LayerNorm2d(${c})`);
     } else if(s.id==='relu'){
       emit(`        self.${name} = nn.ReLU(inplace=True)`);
     } else if(s.id==='gelu'){
@@ -1340,7 +1782,7 @@ function generateTorchAll(block, modelEls, H, W, Cin){
     } else if(s.id==='dropout'){
       const p = cfg.p ?? 0.5; emit(`        self.${name} = nn.Dropout(p=${p})`);
     } else if(s.id==='droppath'){
-      emit(`        self.${name} = nn.Identity()  # TODO: Stochastic Depth not implemented`);
+      const p = cfg.p ?? 0.1; emit(`        self.${name} = DropPath(p=${p})`);
     } else if(s.id==='mhsa' || s.id==='winattn'){
       emit(`        self.${name} = nn.Identity()  # TODO: Attention placeholder`);
     } else if(s.id==='linear'){
@@ -1358,7 +1800,7 @@ function generateTorchAll(block, modelEls, H, W, Cin){
   block.forEach((s, i)=>{
     const name = `layer_${i}`;
     if(s.id==='add'){
-      const from = (s.cfg && typeof s.cfg.from==='number') ? s.cfg.from : null;
+  const from = (s.cfg && typeof s.cfg.fromGlobal==='number') ? s.cfg.fromGlobal : ((s.cfg && typeof s.cfg.from==='number') ? s.cfg.from : null);
       if(from!==null){
         emit(`        x = x + ys[${from}]  # Residual add`);
       } else {
@@ -1367,7 +1809,9 @@ function generateTorchAll(block, modelEls, H, W, Cin){
     } else if(s.id==='concat'){
       emit(`        # TODO: concat requires specifying sources; keeping x unchanged`);
     } else if(s.id==='linear'){
-      emit(`        x = torch.flatten(x, 1)`);
+  emit(`        if x.dim() > 2:`);
+  emit(`            x = F.adaptive_avg_pool2d(x, 1)`);
+  emit(`        x = torch.flatten(x, 1)`);
       emit(`        x = self.${name}(x)`);
     } else {
       emit(`        x = self.${name}(x)`);
@@ -1404,7 +1848,7 @@ function generateTorchAll(block, modelEls, H, W, Cin){
         const groups = cfg.groups || 32;
         emit(`        self.${name} = nn.GroupNorm(num_groups=${groups}, num_channels=${mc})`);
       } else if(s.id==='ln'){
-        emit(`        self.${name} = nn.LayerNorm(${mc})  # NOTE: verify normalized shape`);
+        emit(`        self.${name} = LayerNorm2d(${mc})`);
       } else if(s.id==='relu'){
         emit(`        self.${name} = nn.ReLU(inplace=True)`);
       } else if(s.id==='gelu'){
@@ -1425,7 +1869,9 @@ function generateTorchAll(block, modelEls, H, W, Cin){
         const r = cfg.r || 16; emit(`        self.${name} = SqueezeExcite(${mc}, r=${r})`);
       } else if(s.id==='dropout'){
         const p = cfg.p ?? 0.5; emit(`        self.${name} = nn.Dropout(p=${p})`);
-      } else if(s.id==='droppath' || s.id==='mhsa' || s.id==='winattn' || s.id==='concat' || s.id==='deform'){
+      } else if(s.id==='droppath'){
+        const p = cfg.p ?? 0.1; emit(`        self.${name} = DropPath(p=${p})`);
+      } else if(s.id==='mhsa' || s.id==='winattn' || s.id==='concat' || s.id==='deform'){
         emit(`        self.${name} = nn.Identity()  # TODO`);
       } else if(s.id==='linear'){
         const o = cfg.outF || 1000; emit(`        self.${name} = nn.Linear(${mc}, ${o})`); mc = o;
@@ -1441,7 +1887,7 @@ function generateTorchAll(block, modelEls, H, W, Cin){
     modelSteps.forEach((s, i)=>{
       const name = `m_${i}`;
       if(s.id==='add'){
-        const from = (s.cfg && typeof s.cfg.from==='number') ? s.cfg.from : null;
+  const from = (s.cfg && typeof s.cfg.fromGlobal==='number') ? s.cfg.fromGlobal : ((s.cfg && typeof s.cfg.from==='number') ? s.cfg.from : null);
         if(from!==null){
           emit(`        x = x + ys[${from}]  # Residual add`);
         } else {
@@ -1450,7 +1896,9 @@ function generateTorchAll(block, modelEls, H, W, Cin){
       } else if(s.id==='concat'){
         emit(`        # TODO: concat requires specifying sources; keeping x unchanged`);
       } else if(s.id==='linear'){
-        emit(`        x = torch.flatten(x, 1)`);
+  emit(`        if x.dim() > 2:`);
+  emit(`            x = F.adaptive_avg_pool2d(x, 1)`);
+  emit(`        x = torch.flatten(x, 1)`);
         emit(`        x = self.${name}(x)`);
       } else {
         emit(`        x = self.${name}(x)`);
@@ -1463,12 +1911,52 @@ function generateTorchAll(block, modelEls, H, W, Cin){
   return lines.join('\n');
 }
 
-// Estimate memory (MB): params + activations across steps for batch size
-function estimateMemoryMB(stats, batch){
-  const bytesPer = 4; // float32
-  const paramsMB = (stats.params * bytesPer) / (1024*1024);
-  const actsMB = (stats.outShapes||[]).reduce((acc, s)=> acc + (s ? (s.C * s.H * s.W * batch * bytesPer) : 0), 0) / (1024*1024);
-  return paramsMB + actsMB;
+// Estimate memory (MB): params + optimizer + activations (per batch) + data loader buffers
+// extra context accepts: { Cin,H,W,datasetId,datasetPct,valSplit,numWorkers, ema, inputMode }
+function estimateMemoryMB(stats, batch, precision = 'fp32', optimizer = 'AdamW', extra = {}){
+  const bsz = Math.max(1, Number.isFinite(batch) ? batch : 1);
+  const {
+    Cin: inC,
+    H: inH,
+    W: inW,
+    datasetId,
+    datasetPct = 100,
+    valSplit = 0.1,
+    numWorkers = 0,
+    ema = false,
+    inputMode = 'dataset',
+  } = (extra||{});
+
+  // Activations follow selected precision; weights/optimizer usually kept in fp32 even with AMP
+  const actBytesPer = precision === 'fp32' ? 4 : 2; // fp16/bf16 ~2 bytes
+
+  // Weights (fp32) and optimizer states (approx): SGD(momentum) ~1x, AdamW ~2x
+  const paramsBytes = stats.params * 4; // weights
+  const optStatesMultiplier = optimizer === 'SGD' ? 1.0 : 2.0;
+  const optBytes = stats.params * 4 * optStatesMultiplier;
+  const emaBytes = ema ? (stats.params * 4) : 0; // EMA keeps a shadow copy of weights
+
+  // Activation memory across layers; include rough factor for saved tensors + grads
+  const actFactor = 2.0;
+  const actsBytes = (stats.outShapes||[]).reduce((acc, s)=> acc + (s ? (s.C * s.H * s.W * bsz * actBytesPer) : 0), 0) * actFactor;
+
+  // DataLoader buffered samples (CPU pinned memory); factor in dataset sample size and prefetch
+  let dataBytes = 0;
+  if (inputMode === 'dataset' && inC && inH && inW && datasetId){
+    // Known train sizes (approximate)
+    const TRAIN_SIZES = { CIFAR10: 50000, CIFAR100: 50000, MNIST: 60000, FashionMNIST: 60000, STL10: 5000 };
+    const baseTrain = TRAIN_SIZES[datasetId] ?? 50000;
+    const effTrain = Math.max(1, Math.floor(baseTrain * Math.max(1, Math.min(100, datasetPct)) / 100));
+    const nTrain = Math.max(1, effTrain - Math.floor(effTrain * Math.min(Math.max(valSplit, 0), 0.5)));
+    const prefetchFactor = 2; // PyTorch default prefetch per worker
+    const pipelineBatches = Math.max(0, numWorkers) * prefetchFactor + 2; // +2 for main loop + in-flight GPU copy
+    const bufferedSamples = Math.min(nTrain, bsz * Math.max(1, pipelineBatches));
+    const bytesPerSample = inC * inH * inW * 4; // CPU tensors are float32 after ToTensor/Normalize
+    dataBytes = bufferedSamples * bytesPerSample;
+  }
+
+  const totalMB = (paramsBytes + optBytes + emaBytes + actsBytes + dataBytes) / (1024*1024);
+  return totalMB;
 }
 function formatMem(mb){ if(!isFinite(mb)) return '-'; return mb>1024 ? (mb/1024).toFixed(2)+ ' GB' : mb.toFixed(1)+' MB'; }
 
@@ -1482,11 +1970,13 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('import torch');
   emit('import torch.nn as nn');
   emit('import torch.optim as optim');
+  emit('from contextlib import nullcontext');
   emit('from torch.utils.data import DataLoader, random_split');
   emit('import torchvision');
   emit('import torchvision.transforms as T');
   emit('from tqdm import tqdm');
   emit('from pathlib import Path');
+  emit('import time');
   emit('from runner.generated_block import GeneratedBlock, CIN, H, W' + (hasModel? ', GeneratedModel':'') );
   emit('');
   emit('STOP_PATH = Path(".runner/STOP")');
@@ -1596,10 +2086,11 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('    w = Wrap(model, int(feat), '+String(numClasses)+').to(device)');
   emit('    return w');
   emit('');
-  emit('def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip=0.0, global_step_start=0):');
+  emit('def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip=0.0, global_step_start=0, precision="fp32", scaler=None, epoch_prefix=""):');
   emit('    model.train(); total=0.0; global_step=global_step_start');
   emit('    import os; os.makedirs("checkpoints", exist_ok=True)');
-  emit('    for x,y in tqdm(loader, desc="train", leave=False):');
+  emit('    desc = f"{epoch_prefix} - train" if epoch_prefix else "train"');
+  emit('    for x,y in tqdm(loader, desc=desc, leave=False):');
   emit('        if should_stop():');
   emit('            print("STOP: requested — exiting train loop.")');
   emit('            try: STOP_PATH.unlink(missing_ok=True)');
@@ -1607,12 +2098,19 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('            break');
   emit('        x=x.to(device); y=y.to(device)');
   emit('        optimizer.zero_grad()');
-  emit('        out = model(x)');
-  emit('        if out.dim()>2: out = out.mean(dim=(-1,-2))');
-  emit('        loss = criterion(out, y)');
-  emit('        loss.backward()');
-  emit('        if grad_clip>0: nn.utils.clip_grad_norm_(model.parameters(), grad_clip)');
-  emit('        optimizer.step()');
+  emit('        with get_amp_context(device, precision):');
+  emit('            out = model(x)');
+  emit('            if out.dim()>2: out = out.mean(dim=(-1,-2))');
+  emit('            loss = criterion(out, y)');
+  emit('        if scaler is not None and getattr(scaler, "is_enabled", lambda: False)():');
+  emit('            scaler.scale(loss).backward()');
+  emit('            if grad_clip>0: scaler.unscale_(optimizer); nn.utils.clip_grad_norm_(model.parameters(), grad_clip)');
+  emit('            scaler.step(optimizer)');
+  emit('            scaler.update()');
+  emit('        else:');
+  emit('            loss.backward()');
+  emit('            if grad_clip>0: nn.utils.clip_grad_norm_(model.parameters(), grad_clip)');
+  emit('            optimizer.step()');
   emit('        total += loss.item() * x.size(0)');
   emit('        global_step += 1');
   emit('        # per-step checkpoint')
@@ -1621,19 +2119,21 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('        torch.save(ckpt_step, "checkpoints/last_step.pt")');
   emit('    return total / len(loader.dataset), global_step');
   emit('');
-  emit('def evaluate(model, loader, criterion, device):');
+  emit('def evaluate(model, loader, criterion, device, precision="fp32", epoch_prefix=""):');
   emit('    model.eval(); total=0.0; accs=0.0');
   emit('    with torch.no_grad():');
-  emit('        for x,y in tqdm(loader, desc="val", leave=False):');
+  emit('        desc = f"{epoch_prefix} - val" if epoch_prefix else "val"');
+  emit('        for x,y in tqdm(loader, desc=desc, leave=False):');
   emit('            if should_stop():');
   emit('                print("STOP: requested — exiting val loop.")');
   emit('                try: STOP_PATH.unlink(missing_ok=True)');
   emit('                except Exception: pass');
   emit('                break');
   emit('            x=x.to(device); y=y.to(device)');
-  emit('            out = model(x)');
-  emit('            if out.dim()>2: out = out.mean(dim=(-1,-2))');
-  emit('            loss = criterion(out, y)');
+  emit('            with get_amp_context(device, precision):');
+  emit('                out = model(x)');
+  emit('                if out.dim()>2: out = out.mean(dim=(-1,-2))');
+  emit('                loss = criterion(out, y)');
   emit('            total += loss.item() * x.size(0)');
   emit('            accs += accuracy(out, y) * x.size(0)');
   emit('    return total/len(loader.dataset), accs/len(loader.dataset)');
@@ -1652,17 +2152,54 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('                cm[t.long(), p.long()] += 1');
   emit('    return cm');
   emit('');
-  emit('def resolve_device(pref="auto"):');
+  emit('def resolve_device(pref):');
   emit('    if pref=="cuda" and torch.cuda.is_available(): return torch.device("cuda")');
   emit('    if pref=="mps" and getattr(torch.backends, "mps", None) and torch.backends.mps.is_available(): return torch.device("mps")');
   emit('    if pref=="cpu": return torch.device("cpu")');
-  emit('    # auto fallback: CUDA ▶ MPS ▶ CPU');
-  emit('    if torch.cuda.is_available(): return torch.device("cuda")');
-  emit('    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available(): return torch.device("mps")');
+  emit('    # fallback to CPU when requested device unavailable');
   emit('    return torch.device("cpu")');
   emit('');
+  emit('def get_amp_context(device, precision):');
+  emit('    prec = str(precision or "fp32")');
+  emit('    dev = str(device)');
+  emit('    if prec == "amp_fp16" and dev in ("cuda","mps"):');
+  emit('        try: return torch.autocast(device_type=dev, dtype=torch.float16)');
+  emit('        except Exception: return nullcontext()');
+  emit('    if prec == "amp_bf16":');
+  emit('        try: return torch.autocast(device_type=dev, dtype=torch.bfloat16)');
+  emit('        except Exception: return nullcontext()');
+  emit('    return nullcontext()');
+  emit('');
+  emit('def reset_peak_mem(device):');
+  emit('    dev = str(device)');
+  emit('    try:');
+  emit('        if dev=="cuda" and torch.cuda.is_available():');
+  emit('            torch.cuda.reset_peak_memory_stats()');
+  emit('    except Exception:');
+  emit('        pass');
+  emit('');
+  emit('def get_peak_gpu_mem_mb(device):');
+  emit('    dev = str(device)');
+  emit('    try:');
+  emit('        if dev=="cuda" and torch.cuda.is_available():');
+  emit('            return float(torch.cuda.max_memory_allocated())/(1024*1024)');
+  emit('        if dev=="mps" and hasattr(torch, "mps") and hasattr(torch.mps, "current_allocated_memory"):');
+  emit('            return float(torch.mps.current_allocated_memory())/(1024*1024)');
+  emit('    except Exception:');
+  emit('        return float("nan")');
+  emit('    return float("nan")');
+  emit('');
+  emit('def get_rss_mem_mb():');
+  emit('    try:');
+  emit('        import os, psutil');
+  emit('        return float(psutil.Process(os.getpid()).memory_info().rss)/(1024*1024)');
+  emit('    except Exception:');
+  emit('        return float("nan")');
+  emit('');
   emit('def main():');
-  emit(`    device = resolve_device("${hp.device||'auto'}")`);
+  emit(`    device = resolve_device("${hp.device||'cpu'}")`);
+  emit('    print("DEVICE:", str(device))');
+  emit(`    precision = "${hp.precision||'fp32'}"`);
   emit(`    train_ds, val_ds, test_ds = get_datasets(sample_pct=${Math.max(1, Math.min(100, datasetPct))})`);
   emit(`    train_loader = DataLoader(train_ds, batch_size=${hp.batchSize}, shuffle=True, num_workers=${hp.numWorkers}, pin_memory=True)`);
   emit(`    val_loader = DataLoader(val_ds, batch_size=${hp.batchSize}, shuffle=False, num_workers=${hp.numWorkers})`);
@@ -1672,6 +2209,7 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('    criterion = get_loss()');
   emit('    optimizer = get_optimizer(model)');
   emit('    scheduler = get_scheduler(optimizer)');
+  emit('    scaler = torch.cuda.amp.GradScaler(enabled=(precision=="amp_fp16" and str(device)=="cuda"))');
   emit('    best=0.0');
   emit('    import os; os.makedirs("checkpoints", exist_ok=True)');
   emit('    global_step = 0');
@@ -1702,7 +2240,8 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('                else:');
   emit('                    start_epoch = 1');
   emit('                best = float(payload.get("best", 0.0))');
-  emit('                print(f"RESUME: loaded {ckpt_path} mode={resume.get(\"mode\", \"full\")} start_epoch={start_epoch} best={best:.4f} global_step={global_step}")');
+  emit('                temp = resume.get("mode", "full")');
+  emit('                print(f"RESUME: loaded {ckpt_path} mode={temp} start_epoch={start_epoch} best={best:.4f} global_step={global_step}")');
   emit('            except Exception as e:');
   emit('                print("WARN: failed to resume:", e)');
   emit('                start_epoch = 1');
@@ -1718,10 +2257,18 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('            except Exception: pass');
   emit('            break');
   emit(`        print("EPOCH:", epoch, "/${hp.epochs}")`);
-  emit(`        tr_loss, global_step = train_one_epoch(model, train_loader, criterion, optimizer, device, grad_clip=${hp.gradClip}, global_step_start=global_step)`);
-  emit('        val_loss, val_acc = evaluate(model, val_loader, criterion, device)');
+  emit('        reset_peak_mem(device)');
+  emit('        _t0 = time.time()');
+  emit(`        tr_loss, global_step = train_one_epoch(model, train_loader, criterion, optimizer, device, grad_clip=${hp.gradClip}, global_step_start=global_step, precision=precision, scaler=scaler, epoch_prefix=f"Epoch {epoch}/${hp.epochs}")`);
+  emit('        val_loss, val_acc = evaluate(model, val_loader, criterion, device, precision, epoch_prefix=f"Epoch {epoch}/'+String(hp.epochs)+'")');
+  emit('        epoch_time_sec = max(1e-9, time.time() - _t0)');
+  emit('        gpu_mem_mb = get_peak_gpu_mem_mb(device)');
+  emit('        rss_mem_mb = get_rss_mem_mb()');
   emit('        try:\n            (scheduler.step() if scheduler else None)\n        except Exception:\n            pass');
-  emit('        print(f"METRIC: epoch={epoch} train_loss={tr_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f}")')
+  emit('        # track average epoch time so far');
+  emit('        if epoch == start_epoch: avg_epoch_time_sec = epoch_time_sec');
+  emit('        else: avg_epoch_time_sec = ((epoch - start_epoch) * avg_epoch_time_sec + epoch_time_sec) / max(1, (epoch - start_epoch + 1)) if "avg_epoch_time_sec" in locals() else epoch_time_sec');
+  emit('        print(f"METRIC: epoch={epoch} train_loss={tr_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f} epoch_time_sec={epoch_time_sec:.3f} avg_epoch_time_sec={avg_epoch_time_sec:.3f} gpu_mem_mb={gpu_mem_mb:.1f} rss_mem_mb={rss_mem_mb:.1f}")')
   emit('        improved = val_acc>best')
   emit('        if improved: best=val_acc; print(f"BEST: val_acc={best:.4f}")')
   emit('        # save checkpoints each epoch and best')
@@ -1735,7 +2282,7 @@ function generateTrainingScript({ block, model, Cin, H, W, hp, inputMode, datase
   emit('            torch.save(ckpt, "checkpoints/best.pt")');
   emit('            print(f"CKPT: type=best path=checkpoints/best.pt epoch={epoch} val_acc={val_acc:.4f}")')
   emit('        print(f"CKPT: type=epoch path={fname} epoch={epoch} val_acc={val_acc:.4f}")')
-  emit('    tl, ta = evaluate(model, test_loader, criterion, device)');
+  emit('    tl, ta = evaluate(model, test_loader, criterion, device, precision)');
   emit('    print(f"TEST: acc={ta:.4f} loss={tl:.4f}")');
   emit('    # Save confusion matrix for classification tasks (num_classes>1)');
   emit('    try:');

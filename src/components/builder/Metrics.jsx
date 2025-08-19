@@ -12,8 +12,10 @@ export function MetricsViewer(){
   return (
     <div>
       <div className="grid grid-cols-2 gap-3">
-  <LossesChart title="Loss (Train/Val)" trainData={metrics.train_loss||[]} valData={metrics.val_loss||[]} trainColor="#2563eb" valColor="#dc2626" />
+        <LossesChart title="Loss (Train/Val)" trainData={metrics.train_loss||[]} valData={metrics.val_loss||[]} trainColor="#2563eb" valColor="#dc2626" />
         <MiniChart title="Val Acc" data={metrics.val_acc||[]} color="#16a34a"/>
+        <MiniChart title="Avg Epoch Time (s)" data={metrics.avg_epoch_time_sec||[]} color="#0ea5e9" yLabel="sec"/>
+        <MiniChart title="GPU Mem (MB)" data={metrics.gpu_mem_mb||[]} color="#f59e0b" yLabel="MB"/>
       </div>
     </div>
   );
@@ -33,6 +35,8 @@ export function MetricsSummary(){
       <div>Best Val Acc: {fmt(last('best_val_acc'))}</div>
       <div>Final Test Acc: {fmt(last('test_acc'))}</div>
       <div>Final Test Loss: {fmt(last('test_loss'))}</div>
+      <div>Avg Epoch Time: {fmt(last('avg_epoch_time_sec'))} s</div>
+      <div>Peak GPU Mem: {fmt(last('gpu_mem_mb'))} MB</div>
     </div>
   );
 }
@@ -42,8 +46,12 @@ export function parseMetrics(text){
   const push=(obj,key,x,epoch)=>{ if(!obj[key]) obj[key]=[]; obj[key].push({ x:epoch, y:parseFloat(x) }); };
   const out={};
   lines.forEach(line=>{
-    const m=line.match(/METRIC:\s*epoch=(\d+)\s+train_loss=([0-9.]+)\s+val_loss=([0-9.]+)\s+val_acc=([0-9.]+)/);
-    if(m){ const ep=parseInt(m[1],10); push(out,'train_loss',m[2],ep); push(out,'val_loss',m[3],ep); push(out,'val_acc',m[4],ep); }
+    const epm=line.match(/METRIC:\s*epoch=(\d+)/);
+    const ep = epm ? parseInt(epm[1],10) : NaN;
+    const base=line.match(/METRIC:\s*epoch=\d+\s+train_loss=([0-9.]+)\s+val_loss=([0-9.]+)\s+val_acc=([0-9.]+)/);
+    if(base){ push(out,'train_loss',base[1],ep); push(out,'val_loss',base[2],ep); push(out,'val_acc',base[3],ep); }
+  const ext=line.match(/epoch_time_sec=([^\s]+)\s+avg_epoch_time_sec=([^\s]+)\s+gpu_mem_mb=([^\s]+)\s+rss_mem_mb=([^\s]+)/);
+    if(ext){ push(out,'epoch_time_sec',ext[1],ep); push(out,'avg_epoch_time_sec',ext[2],ep); push(out,'gpu_mem_mb',ext[3],ep); push(out,'rss_mem_mb',ext[4],ep); }
     const b=line.match(/BEST:\s*val_acc=([0-9.]+)/); if(b){ push(out,'best_val_acc',b[1], NaN); }
     const t=line.match(/TEST:\s*acc=([0-9.]+)\s+loss=([0-9.]+)/); if(t){ push(out,'test_acc',t[1], NaN); push(out,'test_loss',t[2], NaN); }
   });
