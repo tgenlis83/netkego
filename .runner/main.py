@@ -27,13 +27,13 @@ def get_resume_request():
         print("WARN: resume read error:", e)
     return None
 
-def get_datasets(root="./data", val_split=0.1, sample_pct=100):
+def get_datasets(root="./data", val_split=0.1, sample_pct=10):
     mean_std = { 'CIFAR10': ([0.4914,0.4822,0.4465],[0.247,0.243,0.261]), 'CIFAR100': ([0.507,0.487,0.441],[0.267,0.256,0.276]), 'MNIST': ([0.1307],[0.3081]), 'FashionMNIST': ([0.2860],[0.3530]), 'STL10': ([0.4467,0.4398,0.4066],[0.2603,0.2566,0.2713]) }
-    mean,std = mean_std.get('MNIST', ([0.5]*1, [0.5]*1))
+    mean,std = mean_std.get('CIFAR10', ([0.5]*3, [0.5]*3))
     tf_train = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
     tf_test  = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
-    full = torchvision.datasets.MNIST(root=root, train=True, download=True, transform=tf_train)
-    test = torchvision.datasets.MNIST(root=root, train=False, download=True, transform=tf_test)
+    full = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=tf_train)
+    test = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=tf_test)
     # Optional training subset sampling BEFORE val split
     sample_pct = max(1, min(100, int(sample_pct)))
     if sample_pct < 100:
@@ -203,8 +203,8 @@ def get_rss_mem_mb():
 def main():
     device = resolve_device("cuda")
     print("DEVICE:", str(device))
-    precision = "amp_fp16"
-    train_ds, val_ds, test_ds = get_datasets(sample_pct=100)
+    precision = "fp32"
+    train_ds, val_ds, test_ds = get_datasets(sample_pct=10)
     train_loader = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=4)
     test_loader = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=4)

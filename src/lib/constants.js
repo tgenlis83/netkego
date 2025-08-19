@@ -39,7 +39,7 @@ export const LAYERS = [
   { id: "concat", name: "Concatenate", category: "Residual", role: "Channel concat", op: "[x, F(x)]", dimReq: "Match (H,W) across inputs" },
   { id: "linear", name: "Linear", category: "Linear", role: "Projection", op: "out = xW + b", defaults: { outF: 1000 }, dimReq: "Features · flattens (C·H·W)" },
   { id: "dropout", name: "Dropout", category: "Regularization", role: "Random feature drop", op: "p", dimReq: "Any tensor" },
-  { id: "droppath", name: "Stochastic Depth", category: "Regularization", role: "Randomly drop residual branch", op: "prob p", dimReq: "Residual branch only" },
+  { id: "droppath", name: "Drop Path", category: "Regularization", role: "Randomly drop residual branch", op: "prob p", dimReq: "Residual branch only" },
 ];
 
 export const PRESETS = [
@@ -119,7 +119,7 @@ export const SYNERGIES = [
   { need:["dwconv","pwconv"], why:"Depthwise + pointwise forms an efficient separable conv.", tag:"efficiency" },
   { need:["bn","relu"], why:"BN followed by ReLU is a robust pairing for CNNs.", tag:"stability" },
   { need:["se"], why:"SE adds channel recalibration; often improves accuracy with minor cost.", tag:"accuracy" },
-  { need:["droppath","add"], why:"Stochastic depth regularizes residual paths in deep stacks.", tag:"regularization" },
+  { need:["droppath","add"], why:"Drop Path regularizes residual paths in deep stacks.", tag:"regularization" },
   { need:["mhsa","gelu"], why:"GELU pairs well with attention due to smoother gradients.", tag:"stability" },
 ];
 

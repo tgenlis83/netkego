@@ -12,7 +12,7 @@ export default function BlockLayersPreview({ composition, className='' }){
           const l = LAYERS.find(x=>x.id===id);
           return (
             <div key={idx} className="flex items-center gap-1">
-              <LayerToken id={id} size="md" title={l?.name || id} />
+              <LayerToken id={id} size="md" title={l?.name || id} showHelper={true} />
             </div>
           );
         })}

@@ -33,7 +33,7 @@ export default function PresetBlocksPanel({ onUse, onAppend }){
               </div>
               <div className="mt-2 flex flex-wrap gap-1.5 items-center">
                 {p.composition.map((id, i)=> (
-                  <LayerToken key={i} id={id} size="md" />
+                  <LayerToken key={i} id={id} size="md" showHelper={true} />
                 ))}
               </div>
             </div>

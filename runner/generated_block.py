@@ -3,78 +3,83 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # Inferred from UI (available to import in main.py)
-CIN = 1
-H = 28
-W = 28
-
-class DropPath(nn.Module):
-    def __init__(self, p: float = 0.0):
-        super().__init__()
-        self.p = float(max(0.0, min(1.0, p)))
-
-    def forward(self, x):
-        if not self.training or self.p <= 0.0:
-            return x
-        keep = 1.0 - self.p
-        if keep <= 0.0:
-            return torch.zeros_like(x)
-        shape = (x.shape[0],) + (1,) * (x.dim() - 1)
-        noise = x.new_empty(shape).bernoulli_(keep) / keep
-        return x * noise
-
-class LayerNorm2d(nn.Module):
-    def __init__(self, c, eps=1e-6):
-        super().__init__()
-        self.ln = nn.LayerNorm(c, eps=eps)
-
-    def forward(self, x):
-        # apply LayerNorm over channels in channels-last order
-        x = x.permute(0, 2, 3, 1)
-        x = self.ln(x)
-        x = x.permute(0, 3, 1, 2)
-        return x
+CIN = 3
+H = 32
+W = 32
 
 class GeneratedBlock(nn.Module):
-    def __init__(self, in_channels=1):
+    def __init__(self, in_channels=3):
         super().__init__()
-        self.layer_0 = nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, groups=1, bias=False)
-        self.layer_1 = LayerNorm2d(1)
-        self.layer_2 = nn.Conv2d(1, 64, kernel_size=1, stride=1, padding=0, bias=False)
-        self.layer_3 = nn.GELU()
-        self.layer_4 = nn.Conv2d(64, 64, kernel_size=1, stride=1, padding=0, bias=False)
-        self.layer_5 = DropPath(p=0.1)
-        self.layer_6 = nn.Identity()  # TODO: Residual Add handling in forward
 
     def forward(self, x):
         ys = []
-        x = self.layer_0(x)
-        ys.append(x)
-        x = self.layer_1(x)
-        ys.append(x)
-        x = self.layer_2(x)
-        ys.append(x)
-        x = self.layer_3(x)
-        ys.append(x)
-        x = self.layer_4(x)
-        ys.append(x)
-        x = self.layer_5(x)
-        ys.append(x)
-        x = x + ys[5]  # Residual add
-        ys.append(x)
         return x
 
 class GeneratedModel(nn.Module):
-    def __init__(self, in_channels=1):
+    def __init__(self, in_channels=3):
         super().__init__()
-        self.m_0 = nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, groups=1, bias=False)
-        self.m_1 = LayerNorm2d(1)
-        self.m_2 = nn.Conv2d(1, 64, kernel_size=1, stride=1, padding=0, bias=False)
-        self.m_3 = nn.GELU()
-        self.m_4 = nn.Conv2d(64, 64, kernel_size=1, stride=1, padding=0, bias=False)
-        self.m_5 = DropPath(p=0.1)
-        self.m_6 = nn.Identity()
-        self.m_7 = nn.AdaptiveAvgPool2d(1)
-        self.m_8 = nn.Linear(64, 10)
+        self.m_0 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, groups=1, dilation=1, bias=False)
+        self.m_1 = nn.BatchNorm2d(64)
+        self.m_2 = nn.ReLU(inplace=True)
+        self.m_3 = nn.MaxPool2d(kernel_size=3, stride=2)
+        self.m_4 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_5 = nn.BatchNorm2d(64)
+        self.m_6 = nn.ReLU(inplace=True)
+        self.m_7 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_8 = nn.BatchNorm2d(64)
+        self.m_9 = nn.ReLU(inplace=True)
+        self.m_10 = nn.Identity()
+        self.m_11 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_12 = nn.BatchNorm2d(64)
+        self.m_13 = nn.ReLU(inplace=True)
+        self.m_14 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_15 = nn.BatchNorm2d(64)
+        self.m_16 = nn.ReLU(inplace=True)
+        self.m_17 = nn.Identity()
+        self.m_18 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_19 = nn.BatchNorm2d(128)
+        self.m_20 = nn.ReLU(inplace=True)
+        self.m_21 = nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_22 = nn.BatchNorm2d(64)
+        self.m_23 = nn.ReLU(inplace=True)
+        self.m_24 = nn.Identity()
+        self.m_25 = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_26 = nn.BatchNorm2d(128)
+        self.m_27 = nn.ReLU(inplace=True)
+        self.m_28 = nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_29 = nn.BatchNorm2d(64)
+        self.m_30 = nn.ReLU(inplace=True)
+        self.m_31 = nn.Identity()
+        self.m_32 = nn.Conv2d(64, 256, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_33 = nn.BatchNorm2d(256)
+        self.m_34 = nn.ReLU(inplace=True)
+        self.m_35 = nn.Conv2d(256, 64, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_36 = nn.BatchNorm2d(64)
+        self.m_37 = nn.ReLU(inplace=True)
+        self.m_38 = nn.Identity()
+        self.m_39 = nn.Conv2d(64, 256, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_40 = nn.BatchNorm2d(256)
+        self.m_41 = nn.ReLU(inplace=True)
+        self.m_42 = nn.Conv2d(256, 64, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_43 = nn.BatchNorm2d(64)
+        self.m_44 = nn.ReLU(inplace=True)
+        self.m_45 = nn.Identity()
+        self.m_46 = nn.Conv2d(64, 512, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_47 = nn.BatchNorm2d(512)
+        self.m_48 = nn.ReLU(inplace=True)
+        self.m_49 = nn.Conv2d(512, 64, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_50 = nn.BatchNorm2d(64)
+        self.m_51 = nn.ReLU(inplace=True)
+        self.m_52 = nn.Identity()
+        self.m_53 = nn.Conv2d(64, 512, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_54 = nn.BatchNorm2d(512)
+        self.m_55 = nn.ReLU(inplace=True)
+        self.m_56 = nn.Conv2d(512, 64, kernel_size=3, stride=1, padding=1, groups=1, dilation=1, bias=False)
+        self.m_57 = nn.BatchNorm2d(64)
+        self.m_58 = nn.ReLU(inplace=True)
+        self.m_59 = nn.Identity()
+        self.m_60 = nn.AdaptiveAvgPool2d(1)
+        self.m_61 = nn.Linear(64, 10)
 
     def forward(self, x):
         ys = []
@@ -90,13 +95,119 @@ class GeneratedModel(nn.Module):
         ys.append(x)
         x = self.m_5(x)
         ys.append(x)
-        x = x + ys[5]  # Residual add
+        x = self.m_6(x)
         ys.append(x)
         x = self.m_7(x)
+        ys.append(x)
+        x = self.m_8(x)
+        ys.append(x)
+        x = self.m_9(x)
+        ys.append(x)
+        # TODO: set a valid source for residual add
+        ys.append(x)
+        x = self.m_11(x)
+        ys.append(x)
+        x = self.m_12(x)
+        ys.append(x)
+        x = self.m_13(x)
+        ys.append(x)
+        x = self.m_14(x)
+        ys.append(x)
+        x = self.m_15(x)
+        ys.append(x)
+        x = self.m_16(x)
+        ys.append(x)
+        # TODO: set a valid source for residual add
+        ys.append(x)
+        x = self.m_18(x)
+        ys.append(x)
+        x = self.m_19(x)
+        ys.append(x)
+        x = self.m_20(x)
+        ys.append(x)
+        x = self.m_21(x)
+        ys.append(x)
+        x = self.m_22(x)
+        ys.append(x)
+        x = self.m_23(x)
+        ys.append(x)
+        # TODO: set a valid source for residual add
+        ys.append(x)
+        x = self.m_25(x)
+        ys.append(x)
+        x = self.m_26(x)
+        ys.append(x)
+        x = self.m_27(x)
+        ys.append(x)
+        x = self.m_28(x)
+        ys.append(x)
+        x = self.m_29(x)
+        ys.append(x)
+        x = self.m_30(x)
+        ys.append(x)
+        # TODO: set a valid source for residual add
+        ys.append(x)
+        x = self.m_32(x)
+        ys.append(x)
+        x = self.m_33(x)
+        ys.append(x)
+        x = self.m_34(x)
+        ys.append(x)
+        x = self.m_35(x)
+        ys.append(x)
+        x = self.m_36(x)
+        ys.append(x)
+        x = self.m_37(x)
+        ys.append(x)
+        # TODO: set a valid source for residual add
+        ys.append(x)
+        x = self.m_39(x)
+        ys.append(x)
+        x = self.m_40(x)
+        ys.append(x)
+        x = self.m_41(x)
+        ys.append(x)
+        x = self.m_42(x)
+        ys.append(x)
+        x = self.m_43(x)
+        ys.append(x)
+        x = self.m_44(x)
+        ys.append(x)
+        # TODO: set a valid source for residual add
+        ys.append(x)
+        x = self.m_46(x)
+        ys.append(x)
+        x = self.m_47(x)
+        ys.append(x)
+        x = self.m_48(x)
+        ys.append(x)
+        x = self.m_49(x)
+        ys.append(x)
+        x = self.m_50(x)
+        ys.append(x)
+        x = self.m_51(x)
+        ys.append(x)
+        # TODO: set a valid source for residual add
+        ys.append(x)
+        x = self.m_53(x)
+        ys.append(x)
+        x = self.m_54(x)
+        ys.append(x)
+        x = self.m_55(x)
+        ys.append(x)
+        x = self.m_56(x)
+        ys.append(x)
+        x = self.m_57(x)
+        ys.append(x)
+        x = self.m_58(x)
+        ys.append(x)
+        # TODO: set a valid source for residual add
+        ys.append(x)
+        x = self.m_60(x)
         ys.append(x)
         if x.dim() > 2:
             x = F.adaptive_avg_pool2d(x, 1)
         x = torch.flatten(x, 1)
-        x = self.m_8(x)
+        x = self.m_61(x)
         ys.append(x)
         return x
