@@ -1,7 +1,8 @@
+/* eslint react-refresh/only-export-components: off */
 import React from 'react';
 import { fmt } from '@/lib/utils';
 
-export function MetricsViewer(){
+export function MetricsViewer({ showLR=false }){
   const [text,setText]=React.useState('');
   React.useEffect(()=>{
     let alive=true;
@@ -14,8 +15,8 @@ export function MetricsViewer(){
       <div className="grid grid-cols-2 gap-3">
         <LossesChart title="Loss (Train/Val)" trainData={metrics.train_loss||[]} valData={metrics.val_loss||[]} trainColor="#2563eb" valColor="#dc2626" />
         <MiniChart title="Val Acc" data={metrics.val_acc||[]} color="#16a34a"/>
+        {showLR && <MiniChart title="Learning Rate" data={metrics.lr||[]} color="#8b5cf6" yLabel="lr"/>}
         <MiniChart title="Avg Epoch Time (s)" data={metrics.avg_epoch_time_sec||[]} color="#0ea5e9" yLabel="sec"/>
-        <MiniChart title="GPU Mem (MB)" data={metrics.gpu_mem_mb||[]} color="#f59e0b" yLabel="MB"/>
       </div>
     </div>
   );
@@ -36,7 +37,6 @@ export function MetricsSummary(){
       <div>Final Test Acc: {fmt(last('test_acc'))}</div>
       <div>Final Test Loss: {fmt(last('test_loss'))}</div>
       <div>Avg Epoch Time: {fmt(last('avg_epoch_time_sec'))} s</div>
-      <div>Peak GPU Mem: {fmt(last('gpu_mem_mb'))} MB</div>
     </div>
   );
 }
@@ -46,13 +46,18 @@ export function parseMetrics(text){
   const push=(obj,key,x,epoch)=>{ if(!obj[key]) obj[key]=[]; obj[key].push({ x:epoch, y:parseFloat(x) }); };
   const out={};
   lines.forEach(line=>{
-    const epm=line.match(/METRIC:\s*epoch=(\d+)/);
-    const ep = epm ? parseInt(epm[1],10) : NaN;
+  const epm=line.match(/METRIC:\s*epoch=(\d+)/);
+  const ep = epm ? parseInt(epm[1],10) : NaN;
     const base=line.match(/METRIC:\s*epoch=\d+\s+train_loss=([0-9.]+)\s+val_loss=([0-9.]+)\s+val_acc=([0-9.]+)/);
     if(base){ push(out,'train_loss',base[1],ep); push(out,'val_loss',base[2],ep); push(out,'val_acc',base[3],ep); }
   const ext=line.match(/epoch_time_sec=([^\s]+)\s+avg_epoch_time_sec=([^\s]+)\s+gpu_mem_mb=([^\s]+)\s+rss_mem_mb=([^\s]+)/);
     if(ext){ push(out,'epoch_time_sec',ext[1],ep); push(out,'avg_epoch_time_sec',ext[2],ep); push(out,'gpu_mem_mb',ext[3],ep); push(out,'rss_mem_mb',ext[4],ep); }
-    const b=line.match(/BEST:\s*val_acc=([0-9.]+)/); if(b){ push(out,'best_val_acc',b[1], NaN); }
+  const b=line.match(/BEST:\s*val_acc=([0-9.]+)/); if(b){ push(out,'best_val_acc',b[1], NaN); }
+  // LR from METRIC line (preferred)
+  const lra=line.match(/METRIC:\s*epoch=(\d+).*?\blr=([0-9.eE+-]+)/);
+  if(lra){ const e=parseInt(lra[1],10); push(out,'lr', lra[2], e); }
+  // legacy fallback: step-level prints "LR: ..."
+  const lr=line.match(/LR:\s*([0-9.eE+-]+)/); if(lr && ep && !lra){ push(out,'lr', lr[1], ep); }
     const t=line.match(/TEST:\s*acc=([0-9.]+)\s+loss=([0-9.]+)/); if(t){ push(out,'test_acc',t[1], NaN); push(out,'test_loss',t[2], NaN); }
   });
   return out;
@@ -66,7 +71,8 @@ export function MiniChart({ title, data, color, xLabel='epoch', yLabel }){
   const xs = data.map(p=>p.x).filter(x=>Number.isFinite(x));
   const ys = data.map(p=>p.y).filter(y=>Number.isFinite(y));
   const xmin = xs.length? Math.min(...xs) : 0; const xmax= xs.length? Math.max(...xs):1;
-  const ymin = ys.length? Math.min(...ys) : 0; const ymax= ys.length? Math.max(...ys):1;
+  let ymin = ys.length? Math.min(...ys) : 0; let ymax= ys.length? Math.max(...ys):1;
+  if(ymin===ymax){ ymax = ymin + (ymin===0 ? 1 : Math.abs(ymin)*0.1); }
   const scaleX=(x)=> padL + plotW * (xs.length? (x - xmin) / Math.max(1e-6, (xmax - xmin)) : 0);
   const scaleY=(y)=> padT + plotH - plotH * (ys.length? (y - ymin) / Math.max(1e-6, (ymax - ymin)) : 0);
   const path = data.filter(p=>Number.isFinite(p.x) && Number.isFinite(p.y)).map((p,i)=> (i? 'L':'M') + scaleX(p.x) + ',' + scaleY(p.y)).join(' ');
@@ -108,9 +114,14 @@ export function MiniChart({ title, data, color, xLabel='epoch', yLabel }){
           </g>
         )}
         {/* tick labels */}
-        {yTickVals.map((v,i)=> (
-          <text key={`yl${i}`} x={padL-6} y={scaleY(v)+3} textAnchor="end" fontSize="10" fill="#6b7280">{fmt(v)}</text>
-        ))}
+        {yTickVals.map((v,i)=> {
+          const label = (yLabel==='lr' || title.toLowerCase().includes('learning rate'))
+            ? (Number.isFinite(v)? v.toExponential(1) : '')
+            : fmt(v);
+          return (
+            <text key={`yl${i}`} x={padL-6} y={scaleY(v)+3} textAnchor="end" fontSize="10" fill="#6b7280">{label}</text>
+          );
+        })}
         {xTickVals.map((v,i)=> (
           <text key={`xl${i}`} x={scaleX(v)} y={h-padB+12} textAnchor="middle" fontSize="10" fill="#6b7280">{Number.isFinite(v)? Math.round(v) : ''}</text>
         ))}
@@ -122,7 +133,7 @@ export function MiniChart({ title, data, color, xLabel='epoch', yLabel }){
   );
 }
 
-export function ConfusionMatrix({ classes }){
+export function ConfusionMatrix(){
   const [data,setData] = React.useState(null);
   React.useEffect(()=>{
     let alive=true;

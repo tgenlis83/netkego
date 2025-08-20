@@ -27,10 +27,11 @@ def get_resume_request():
         print("WARN: resume read error:", e)
     return None
 
-def get_datasets(root="./data", val_split=0.1, sample_pct=10):
+def get_datasets(root="./data", val_split=0.1, sample_pct=100):
     mean_std = { 'CIFAR10': ([0.4914,0.4822,0.4465],[0.247,0.243,0.261]), 'CIFAR100': ([0.507,0.487,0.441],[0.267,0.256,0.276]), 'MNIST': ([0.1307],[0.3081]), 'FashionMNIST': ([0.2860],[0.3530]), 'STL10': ([0.4467,0.4398,0.4066],[0.2603,0.2566,0.2713]) }
-    mean,std = mean_std.get('CIFAR10', ([0.5]*3, [0.5]*3))
-    tf_train = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
+    _fallback = ([0.5]*3, [0.5]*3)
+    mean,std = mean_std.get('CIFAR10', _fallback)
+    tf_train = T.Compose([T.AutoAugment(policy=T.AutoAugmentPolicy.CIFAR10), T.ToTensor(), T.Normalize(mean, std)])
     tf_test  = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
     full = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=tf_train)
     test = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=tf_test)
@@ -53,7 +54,7 @@ def get_loss():
     return nn.CrossEntropyLoss()
 
 def get_optimizer(model):
-    return optim.AdamW(model.parameters(), lr=0.01, weight_decay=0.0001)
+    return optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
 
 def get_scheduler(opt):
     return None
@@ -203,11 +204,11 @@ def get_rss_mem_mb():
 def main():
     device = resolve_device("cuda")
     print("DEVICE:", str(device))
-    precision = "fp32"
-    train_ds, val_ds, test_ds = get_datasets(sample_pct=10)
-    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=4)
-    test_loader = DataLoader(test_ds, batch_size=128, shuffle=False, num_workers=4)
+    precision = "amp_fp16"
+    train_ds, val_ds, test_ds = get_datasets(sample_pct=100)
+    train_loader = DataLoader(train_ds, batch_size=4096, shuffle=True, num_workers=12, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=4096, shuffle=False, num_workers=12)
+    test_loader = DataLoader(test_ds, batch_size=4096, shuffle=False, num_workers=12)
     model = get_model(device)
     model = ensure_trainable(model, train_loader, device, 10)
     criterion = get_loss()
@@ -254,17 +255,17 @@ def main():
             start_epoch = 1
     else:
         start_epoch = 1
-    for epoch in range(start_epoch, 10+1):
+    for epoch in range(start_epoch, 30+1):
         if should_stop():
             print("STOP: requested — stopping before new epoch.")
             try: STOP_PATH.unlink(missing_ok=True)
             except Exception: pass
             break
-        print("EPOCH:", epoch, "/10")
+        print("EPOCH:", epoch, "/30")
         reset_peak_mem(device)
         _t0 = time.time()
-        tr_loss, global_step = train_one_epoch(model, train_loader, criterion, optimizer, device, grad_clip=0, global_step_start=global_step, precision=precision, scaler=scaler, epoch_prefix=f"Epoch {epoch}/10")
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device, precision, epoch_prefix=f"Epoch {epoch}/10")
+        tr_loss, global_step = train_one_epoch(model, train_loader, criterion, optimizer, device, grad_clip=0, global_step_start=global_step, precision=precision, scaler=scaler, epoch_prefix=f"Epoch {epoch}/30")
+        val_loss, val_acc = evaluate(model, val_loader, criterion, device, precision, epoch_prefix=f"Epoch {epoch}/30")
         epoch_time_sec = max(1e-9, time.time() - _t0)
         gpu_mem_mb = get_peak_gpu_mem_mb(device)
         rss_mem_mb = get_rss_mem_mb()
@@ -275,7 +276,9 @@ def main():
         # track average epoch time so far
         if epoch == start_epoch: avg_epoch_time_sec = epoch_time_sec
         else: avg_epoch_time_sec = ((epoch - start_epoch) * avg_epoch_time_sec + epoch_time_sec) / max(1, (epoch - start_epoch + 1)) if "avg_epoch_time_sec" in locals() else epoch_time_sec
-        print(f"METRIC: epoch={epoch} train_loss={tr_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f} epoch_time_sec={epoch_time_sec:.3f} avg_epoch_time_sec={avg_epoch_time_sec:.3f} gpu_mem_mb={gpu_mem_mb:.1f} rss_mem_mb={rss_mem_mb:.1f}")
+        try: cur_lr = float(optimizer.param_groups[0]["lr"])
+        except Exception: cur_lr = float("nan")
+        print(f"METRIC: epoch={epoch} train_loss={tr_loss:.4f} val_loss={val_loss:.4f} val_acc={val_acc:.4f} epoch_time_sec={epoch_time_sec:.3f} avg_epoch_time_sec={avg_epoch_time_sec:.3f} gpu_mem_mb={gpu_mem_mb:.1f} rss_mem_mb={rss_mem_mb:.1f} lr={cur_lr:.6e}")
         improved = val_acc>best
         if improved: best=val_acc; print(f"BEST: val_acc={best:.4f}")
         # save checkpoints each epoch and best

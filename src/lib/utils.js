@@ -3,7 +3,7 @@
 export function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
 export function copyText(text){
-  try { navigator.clipboard?.writeText(text); } catch(_) {}
+  try { navigator.clipboard?.writeText(text); } catch { /* noop */ }
 }
 
 export function downloadText(filename, text){
@@ -20,11 +20,14 @@ export function ansiToHtml(s){
     .replaceAll(/</g,'&lt;')
     .replaceAll(/>/g,'&gt;');
   let t = esc(s);
+  // Use hex escape for ESC (\x1b) in regex source to satisfy no-control-regex
+  const ESC = '\x1b';
+  // Escape '[' to avoid creating a character class in RegExp patterns
   t = t
-    .replaceAll(/\x1b\[31m/g, '<span style="color:#f87171">')
-    .replaceAll(/\x1b\[32m/g, '<span style="color:#34d399">')
-    .replaceAll(/\x1b\[33m/g, '<span style="color:#fbbf24">')
-    .replaceAll(/\x1b\[0m/g, '</span>');
+    .replaceAll(new RegExp(ESC + "\\[31m", 'g'), '<span style="color:#f87171">')
+    .replaceAll(new RegExp(ESC + "\\[32m", 'g'), '<span style="color:#34d399">')
+    .replaceAll(new RegExp(ESC + "\\[33m", 'g'), '<span style="color:#fbbf24">')
+    .replaceAll(new RegExp(ESC + "\\[0m", 'g'), '</span>');
   return t;
 }
 

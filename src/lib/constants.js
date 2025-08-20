@@ -13,6 +13,7 @@ export const CAT_COLORS = {
 };
 
 export const LAYERS = [
+  { id: "patchify", name: "Patch Embedding", category: "Convolution", role: "Split image into patches", op: "Conv2d(k=patch, s=patch) to dims", defaults: { patch: 16, embedC: 768 }, dimReq: "N,C,H,W · H,W divisible by patch" },
   { id: "conv", name: "Conv2d", category: "Convolution", role: "Learnable local features", op: "k×k, stride s, groups g", defaults: { k: 3, s: 1, g: 1, outC: 64 }, dimReq: "N,C,H,W · flexible; updates H,W by stride" },
   { id: "pwconv", name: "Pointwise Conv (1×1)", category: "Convolution", role: "Channel mixing", op: "1×1", defaults: { k: 1, s: 1, g: 1, outC: 64 }, dimReq: "N,C,H,W · preserves H,W" },
   { id: "dwconv", name: "Depthwise Conv", category: "Convolution", role: "Per-channel spatial conv", op: "k×k, groups=inC", defaults: { k: 3, s: 1 }, dimReq: "N,C,H,W · groups=inC (per-channel)" },
@@ -33,7 +34,7 @@ export const LAYERS = [
   { id: "se", name: "Squeeze-and-Excitation", category: "Regularization", role: "Channel attention", op: "GAP→MLP→sigmoid→scale", defaults: { r: 16 }, dimReq: "N,C,H,W · channel-wise" },
   { id: "eca", name: "ECA", category: "Regularization", role: "Efficient channel attention", op: "1D conv over channels", dimReq: "N,C,H,W · channel-wise" },
   { id: "cbam", name: "CBAM", category: "Regularization", role: "Channel+Spatial attention", op: "SE + spatial mask", dimReq: "N,C,H,W · channel+spatial" },
-  { id: "mhsa", name: "MHSA (2D)", category: "Attention", role: "Self-attention", op: "softmax(QK^T/√d)·V", dimReq: "N,C,H,W · O((H·W)^2)" },
+  { id: "mhsa", name: "MHSA (2D)", category: "Attention", role: "Self-attention", op: "softmax(QK^T/√d)·V", defaults: { heads: 8, attnDrop: 0.0, projDrop: 0.0 }, dimReq: "N,C,H,W · O((H·W)^2); heads must divide C" },
   { id: "winattn", name: "Windowed Attention", category: "Attention", role: "Local attention", op: "Swin-style windows", dimReq: "N,C,H,W · windowable H,W" },
   { id: "add", name: "Residual Add", category: "Residual", role: "Skip connection", op: "x + F(x)", defaults: { from: null }, dimReq: "Requires same (C,H,W) as source" },
   { id: "concat", name: "Concatenate", category: "Residual", role: "Channel concat", op: "[x, F(x)]", dimReq: "Match (H,W) across inputs" },
@@ -43,9 +44,10 @@ export const LAYERS = [
 ];
 
 export const PRESETS = [
-  { id: "resnet_basic", name: "ResNet BasicBlock", family: "ResNet-18/34", composition: ["conv","bn","relu","conv","bn","relu"], strengths: ["Simple","Stable"], drawbacks: ["Less params-efficient when very deep"], goodSlots: ["stage"] },
-  { id: "resnet_bottleneck", name: "ResNet Bottleneck", family: "ResNet-50/101/152", composition: ["pwconv","bn","relu","conv","bn","relu","pwconv","bn","relu"], strengths: ["Efficient at scale"], drawbacks: ["1×1 bandwidth","Memory"], goodSlots: ["stage"] },
-  { id: "resnext", name: "ResNeXt Bottleneck (cardinality)", family: "ResNeXt", composition: ["pwconv","bn","relu","grpconv","bn","relu","pwconv","bn","relu"], strengths: ["Higher accuracy at similar cost"], drawbacks: ["Group-conv perf variance"], goodSlots: ["stage"] },
+  { id: "vit_encoder", name: "Transformer Encoder (Pre-Norm)", family: "ViT", composition: ["ln","mhsa","add","ln","pwconv","gelu","dropout","pwconv","add"], strengths: ["Stable (pre-norm)","Modular"], drawbacks: ["Quadratic attention cost"], goodSlots: ["stage"] },
+  { id: "resnet_basic", name: "ResNet BasicBlock", family: "ResNet-18/34", composition: ["conv","bn","relu","conv","bn"], strengths: ["Simple","Stable"], drawbacks: ["Less params-efficient when very deep"], goodSlots: ["stage"] },
+  { id: "resnet_bottleneck", name: "ResNet Bottleneck", family: "ResNet-50/101/152", composition: ["pwconv","bn","relu","conv","bn","relu","pwconv","bn"], strengths: ["Efficient at scale"], drawbacks: ["1×1 bandwidth","Memory"], goodSlots: ["stage"] },
+  { id: "resnext", name: "ResNeXt Bottleneck (cardinality)", family: "ResNeXt", composition: ["pwconv","bn","relu","grpconv","bn","relu","pwconv","bn"], strengths: ["Higher accuracy at similar cost"], drawbacks: ["Group-conv perf variance"], goodSlots: ["stage"] },
   { id: "preact_bottleneck", name: "Pre-activation Bottleneck", family: "ResNet v2", composition: ["bn","relu","pwconv","bn","relu","conv","bn","relu","pwconv"], strengths: ["Smoother optimization"], drawbacks: ["Layout-only change"], goodSlots: ["stage"] },
   { id: "mbv1", name: "MobileNetV1 DW-Separable", family: "MobileNetV1", composition: ["dwconv","bn","relu","pwconv","bn","relu"], strengths: ["Very efficient"], drawbacks: ["Depthwise kernel perf sensitivity"], goodSlots: ["stage"] },
   { id: "mbv2", name: "MobileNetV2 Inverted Residual", family: "MobileNetV2", composition: ["pwconv","bn","relu","dwconv","bn","relu","pwconv","bn"], strengths: ["Edge efficiency"], drawbacks: ["Linear bottleneck sensitivity"], goodSlots: ["stage"] },
@@ -66,14 +68,35 @@ export const MODEL_PRESETS = [
     family: 'ResNet',
     description: 'Stem + stacks of BasicBlocks, GAP + Linear',
     plan: [
-      { type: 'layer', id: 'conv', cfg: { outC: 64, k: 7, s: 2 } },
+  // CIFAR-style stem: 3x3 conv, stride 1, no initial maxpool
+  { type: 'layer', id: 'conv', cfg: { outC: 64, k: 3, s: 1 } },
       { type: 'layer', id: 'bn' },
       { type: 'layer', id: 'relu' },
-      { type: 'layer', id: 'maxpool', cfg: { k: 3, s: 2 } },
-      { type: 'blockRef', preset: 'resnet_basic', repeat: 2, outC: 64 },
-      { type: 'blockRef', preset: 'resnet_basic', repeat: 2, outC: 128 },
-      { type: 'blockRef', preset: 'resnet_basic', repeat: 2, outC: 256 },
-      { type: 'blockRef', preset: 'resnet_basic', repeat: 2, outC: 512 },
+  // Stage 1 (64): no downsample in first block
+  { type: 'blockRef', preset: 'resnet_basic', repeat: 2, outC: 64 },
+  // Stage 2 (128): downsample at first block
+  { type: 'blockRef', preset: 'resnet_basic', repeat: 1, outC: 128, downsample: true },
+  { type: 'blockRef', preset: 'resnet_basic', repeat: 1, outC: 128 },
+  // Stage 3 (256): downsample at first block
+  { type: 'blockRef', preset: 'resnet_basic', repeat: 1, outC: 256, downsample: true },
+  { type: 'blockRef', preset: 'resnet_basic', repeat: 1, outC: 256 },
+  // Stage 4 (512): downsample at first block
+  { type: 'blockRef', preset: 'resnet_basic', repeat: 1, outC: 512, downsample: true },
+  { type: 'blockRef', preset: 'resnet_basic', repeat: 1, outC: 512 },
+      { type: 'layer', id: 'gap' },
+      { type: 'layer', id: 'linear', cfg: { outF: 1000 } },
+    ],
+  },
+  {
+    id: 'vit_s16',
+    name: 'ViT-S/16 (toy)',
+    family: 'ViT',
+    description: 'Patchify + Transformer blocks + CLS head',
+    plan: [
+      { type: 'layer', id: 'patchify', cfg: { patch: 16, embedC: 384 } },
+  // 6 Transformer encoder blocks
+  { type: 'blockRef', preset: 'vit_encoder', repeat: 6, outC: 384 },
+
       { type: 'layer', id: 'gap' },
       { type: 'layer', id: 'linear', cfg: { outF: 1000 } },
     ],
@@ -125,6 +148,7 @@ export const SYNERGIES = [
 
 export const HP_PRESETS = [
   { id:"resnet_modern", name:"ResNet (modern)", details:{ optimizer:"SGD", lr:0.1, momentum:0.9, weightDecay:1e-4, scheduler:"cosine", warmup:5, epochs:200, labelSmoothing:0.1, mixup:0.2, cutmix:0.2, ema:false } },
+  { id:"vit_small_adamw", name:"ViT (AdamW)", details:{ optimizer:"AdamW", lr:0.0003, weightDecay:0.05, scheduler:"cosine", warmup:10, epochs:300, stochasticDepth:0.1, labelSmoothing:0.1, mixup:0.5, cutmix:0.0, ema:true } },
   { id:"convnext_recipe", name:"ConvNeXt (AdamW)", details:{ optimizer:"AdamW", lr:0.001, weightDecay:0.05, scheduler:"cosine", warmup:20, epochs:300, stochasticDepth:0.1, autoAugment:true, ema:true } },
   { id:"mobile_recipe", name:"MobileNetV3/EfficientNet", details:{ optimizer:"AdamW", lr:0.0015, weightDecay:0.05, scheduler:"cosine_warm_restarts", T0:10, Tmult:2, warmup:5, epochs:350, labelSmoothing:0.1, mixup:0.2, cutmix:0.2, ema:true } },
 ];
@@ -135,4 +159,19 @@ export const DATASETS = [
   { id:'MNIST', name:'MNIST', H:28, W:28, C:1, classes:10, desc: '70k 28×28 grayscale digit images (60k train/10k test), 10 classes (0–9).' },
   { id:'FashionMNIST', name:'Fashion-MNIST', H:28, W:28, C:1, classes:10, desc: '70k 28×28 grayscale fashion images (60k train/10k test), 10 apparel classes.' },
   { id:'STL10', name:'STL10', H:96, W:96, C:3, classes:10, desc: '13k labeled 96×96 color images (5k train/8k test), 10 classes; extra 100k unlabeled.' },
+];
+
+// Preprocessing palette (maps to torchvision transforms)
+export const PREPROC_LAYERS = [
+  { id:'toTensor', name:'ToTensor', role:'Convert to tensor', defaults:{} , supports:(ds)=> true },
+  { id:'normalize', name:'Normalize', role:'Mean/std normalization', defaults:{ mean:[0.5,0.5,0.5], std:[0.5,0.5,0.5], autoDataset:true }, supports:(ds)=> true },
+  { id:'resize', name:'Resize', role:'Resize shorter side', defaults:{ size: 224 }, supports:(ds)=> true },
+  { id:'centerCrop', name:'CenterCrop', role:'Crop center', defaults:{ size: 224 }, supports:(ds)=> true },
+  { id:'randomResizedCrop', name:'RandomResizedCrop', role:'Crop & resize (train)', defaults:{ size:224, scaleMin:0.8, scaleMax:1.0, ratioMin:0.75, ratioMax:1.333 }, supports:(ds)=> true },
+  { id:'randomCrop', name:'RandomCrop', role:'Random crop (train)', defaults:{ padding:4, size:null }, supports:(ds)=> true },
+  { id:'randomHorizontalFlip', name:'HorizontalFlip', role:'Random horizontal flip', defaults:{ p:0.5 }, supports:(ds)=> true },
+  { id:'colorJitter', name:'ColorJitter', role:'Random color jitter', defaults:{ brightness:0.4, contrast:0.4, saturation:0.4, hue:0.1 }, supports:(ds)=> (ds?.C||3)===3 },
+  { id:'randomRotation', name:'RandomRotation', role:'Rotate', defaults:{ degrees:15 }, supports:(ds)=> true },
+  { id:'randomErasing', name:'RandomErasing', role:'Erase patches (train)', defaults:{ p:0.25 }, supports:(ds)=> true },
+  { id:'autoAugment', name:'AutoAugment', role:'Policy-based aug', defaults:{ policy:'CIFAR10' }, supports:(ds)=> true },
 ];
