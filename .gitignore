@@ -30,3 +30,4 @@ checkpoints/
 .venv
 
 .runner/
+runner/generated_block.py
